@@ -12,37 +12,35 @@
 const unsigned int screenWidth = 800;
 const unsigned int screenHeight = 800;
 
-// now we have all of the basis of the ray tracer working 
+// now we have all of the basis of the ray tracer working
 // introducing structs to simplify the length of code
 // used to store 3 coords 3d scructyuire
-// common namming convench online Vector 3 
+// common namming convench online Vector 3
 // later may put vec4 used for the pixel datas
 struct Vec3
 {
     float x, y, z;
 };
 
-
 // from my reading on https://www.scratchapixel.com/lessons/3d-basic-rendering/minimal-ray-tracer-rendering-simple-shapes/ray-sphere-intersection
 // a ray can be defed as a ray(t) = Origin + t * Direction
-// Origin is (camX, camY, camZ) and e Direction as (rayDirX, rayDirY, rayDirZ) 
-// t = distance from point of intersection to the origin of the ray 
+// Origin is (camX, camY, camZ) and e Direction as (rayDirX, rayDirY, rayDirZ)
+// t = distance from point of intersection to the origin of the ray
 // goal is to find value of t (if intersects) use it to find the point of intersect with spehere
-// then to shade that specific pixel based on point of intsect along with normal of surface at that point 
+// then to shade that specific pixel based on point of intsect along with normal of surface at that point
 // also taking account the position of the light source in order to calculate the lighting components and therrefore colour of pixel
 
 __device__ bool raySphereIntersection(Vec3 camPos, Vec3 spherePos, float sphereRadius, Vec3 rayDir, float &sphereDistance)
 {
 
-
-    // implicit equation of a sphere with radius r centred at C = 0,0,0 
+    // implicit equation of a sphere with radius r centred at C = 0,0,0
     // is given by (x-x0)^2 + (y-y0)^2 + (z-z0)^2 = r^2
     // this means that any piont P  on the sphere must be the following
     // (P-C) . (P-C) = r^2
 
     // but in order to find the goal (t) (origin to distance from point of intersection) we need to find its intersection
     // to do this we must subsitue the point P into the equation of a ray equation to find the point at which it intersects the spehre
-    // this makes our point P = Origin + t * Direction 
+    // this makes our point P = Origin + t * Direction
     // now we have a new definition of P we can put that in the implicit equation of the spehere from above
     // (O + tD - C) . (O + tD - C) = r^2
     // befre expanding it to make it simplier we can rearrange and sub in a new var for the vars we already know (O and C)
@@ -53,13 +51,12 @@ __device__ bool raySphereIntersection(Vec3 camPos, Vec3 spherePos, float sphereR
     // here L i have assigned to originToSphere
     Vec3 originToSphere = {camPos.x - spherePos.x, camPos.y - spherePos.y, camPos.z - spherePos.z};
 
-
     // equation now becomes (L + tD) . (L + tD) = r^2
     // = L . (L + tD) + tD . (L + tD)
     // = (L . L) + (L . tD) + (tD . L) + (tD . tD)
     // as t is a scalar dot product distributes seperately from the vecotrs we can remove them out with no issue
     // = (L . L) + t(L . D) + t(D . L) + t^2(D . D)
-    // as t is multipled within the dot product of (D . D) twice we can use t^2 
+    // as t is multipled within the dot product of (D . D) twice we can use t^2
     // L . D = D. L meaning t(L . D) and t(D . L) are indentical so we can multi them by 2
     // = (L . L) + 2t(L . D) + t^2(D . D)
     // rearranging we get
@@ -68,15 +65,15 @@ __device__ bool raySphereIntersection(Vec3 camPos, Vec3 spherePos, float sphereR
     // a = D . D
     // b = L . D
     // c = L . L
-    // giviing us 
+    // giviing us
     // at^2 + 2bt + c = r^2
 
-    // a = D . D 
+    // a = D . D
     // dot product of the ray direction with itself
     float a = rayDir.x * rayDir.x + rayDir.y * rayDir.y + rayDir.z * rayDir.z;
 
     // b = L . D
-    // dot product of the length of vector from origin to center with the rayDirection    
+    // dot product of the length of vector from origin to center with the rayDirection
     // multipy b by 2 explained below
     float b = 2.0f * (originToSphere.x * rayDir.x + originToSphere.y * rayDir.y + originToSphere.z * rayDir.z);
 
@@ -84,14 +81,14 @@ __device__ bool raySphereIntersection(Vec3 camPos, Vec3 spherePos, float sphereR
     // dot product of the length of vector from origin to center with inself sub the sphere radius sphere to make sure its equal to zero explained below
     float c = ((originToSphere.x * originToSphere.x + originToSphere.y * originToSphere.y + originToSphere.z * originToSphere.z) - (sphereRadius * sphereRadius));
 
-    // obviously quadratic equation is given as 
+    // obviously quadratic equation is given as
     // x = (-b (+/-) sqr(b^2 - 4ac)) / 2a
 
-    // solving the discrimiant gives us the amount of solutions 
+    // solving the discrimiant gives us the amount of solutions
     // b^2 - 4ac > 0 two real solutions
     // b^2 - 4ac = 0 one real solution
     // b^2 - 4ac < 0 two complex solutions
-    // we are dealing with strictly real solutions we can rule out where the discriminant is less than 0 
+    // we are dealing with strictly real solutions we can rule out where the discriminant is less than 0
 
     // b^2 - 4ac > 0 two real solutions
     // b^2 - 4ac = 0 one real solution
@@ -105,7 +102,7 @@ __device__ bool raySphereIntersection(Vec3 camPos, Vec3 spherePos, float sphereR
     // quadratic equation ax^2 + bx + c = 0
     // at^2 + 2bt + (c - r^2) = 0
     // d = a
-    // e = 2b  
+    // e = 2b
     // f = (c - r^2)
     // dt^2 + et + f = 0
     // now in quadratic form
@@ -114,8 +111,8 @@ __device__ bool raySphereIntersection(Vec3 camPos, Vec3 spherePos, float sphereR
     // b^2 - 4 * a * c
     float discriminant = b * b - (4.0f * a * c);
 
-    // mentioned above check for only real solutions either discrim is greater than 0 or exactly 0 
-       if (discriminant >= 0)
+    // mentioned above check for only real solutions either discrim is greater than 0 or exactly 0
+    if (discriminant >= 0)
     {
         // (- b - sqrt(b^2-4ac)) / 2a for nearest intersection to the camera  enter spehere
         // (- b - sqrt(b^2-4ac)) / 2a for far intsect to cam  exit spehere
@@ -205,48 +202,76 @@ __device__ void shadeSphere(unsigned char *pixels, int pixelIndex, float sphereD
     // Lm is the direction from the point on surface to the light
     // we have the distance from the cam to the hit point
 
+    /* IT NOW WORKS WITH THE BASIC XYZ VEC3 STRUCTURE  ADDED IT FOR THE THE SIMPLE COORDS NOW USING IT FOR MORE COMPLEX COORDS KEEPIN THE OG CODE JUST IN CASE*/
+
     // in the ray intersect func we worked out the distance from cam to the hit point
     // we can use this to work out the coordinates of hit point on the surface
     // multiplying ray dir by the distance gives vector from cam to point
     // technically we dont need to add cam pos as cam is at orgin but may be useful if we want to move cam
+
+    /*
     float hitPointX = camPos.x + rayDir.x * sphereDistance;
     float hitPointY = camPos.y + rayDir.y * sphereDistance;
     float hitPointZ = camPos.z + rayDir.z * sphereDistance;
+    */
+
+    Vec3 hitPoint = {(camPos.x + rayDir.x * sphereDistance), (camPos.y + rayDir.y * sphereDistance), (camPos.z + rayDir.z * sphereDistance)};
 
     // now we have the hit coords we can work out light distance and direction
     // lightToHit vector now contains distance and direction from hit point to light source
+
+    /*
     float lightToHitX = lightPos.x - hitPointX;
     float lightToHitY = lightPos.y - hitPointY;
     float lightToHitZ = lightPos.z - hitPointZ;
+    */
+
+    // could introduce function for addition subtraction but leave it for now
+    Vec3 lightToHit = {(lightPos.x - hitPoint.x), (lightPos.y - hitPoint.y), (lightPos.z - hitPoint.z)};
 
     // we normalise the lightToHit vector to only have direction vecotr
 
     // to normalise the vector norm(u) = u / magnitude of (u)
-    // mag which is sqrt(x^2 + y^2 + z^2)
+    // mag which  is sqrt(x^2 + y^2 + z^2)
+
+    /*
     float lightDirectionLength = sqrtf(lightToHitX * lightToHitX + lightToHitY * lightToHitY + lightToHitZ * lightToHitZ);
     float lightDirectionX = lightToHitX / lightDirectionLength;
     float lightDirectionY = lightToHitY / lightDirectionLength;
     float lightDirectionZ = lightToHitZ / lightDirectionLength;
+    */
+
+    float lightDirectionLength = sqrtf(lightToHit.x * lightToHit.x + lightToHit.y * lightToHit.y + lightToHit.z * lightToHit.z);
+    Vec3 lightDirection = {(lightToHit.x / lightDirectionLength), (lightToHit.y / lightDirectionLength), (lightToHit.z / lightDirectionLength)};
 
     // now we have the lightDirection X/Y/Z vector aka Lm
 
     // to calculate N (surface normal) we calculate vector from center of sphere to hit point then normal it
     // again surfaceNormal currently is both direction and distance normalising will give us soley the direction
+
+    /*
     float sphereToHitX = hitPointX - spherePos.x;
     float sphereToHitY = hitPointY - spherePos.y;
     float sphereToHitZ = hitPointZ - spherePos.z;
+    */
+
+    Vec3 sphereToHit = {hitPoint.x - spherePos.x, hitPoint.y - spherePos.y, hitPoint.z - spherePos.z};
 
     // we do same as light direct to normal the surface normal
-    float surfaceNormalLength = sqrtf(sphereToHitX * sphereToHitX + sphereToHitY * sphereToHitY + sphereToHitZ * sphereToHitZ);
+    float surfaceNormalLength = sqrtf(sphereToHit.x * sphereToHit.x + sphereToHit.y * sphereToHit.y + sphereToHit.z * sphereToHit.z);
+    /*
     float surfaceNormalX = sphereToHitX / surfaceNormalLength;
     float surfaceNormalY = sphereToHitY / surfaceNormalLength;
     float surfaceNormalZ = sphereToHitZ / surfaceNormalLength;
+    */
+
+    Vec3 surfaceNormal = {sphereToHit.x / surfaceNormalLength, sphereToHit.y / surfaceNormalLength, sphereToHit.z / surfaceNormalLength};
 
     // Lm is lightDir XYZ
     // N is surfaceNormal XYZ
 
     // now we have (Lm . N) we can calc diffuse factor
-    float lightDirDotSurfaceNormal = lightDirectionX * surfaceNormalX + lightDirectionY * surfaceNormalY + lightDirectionZ * surfaceNormalZ;
+    float lightDirDotSurfaceNormal = lightDirection.x * surfaceNormal.x + lightDirection.y * surfaceNormal.y + lightDirection.z * surfaceNormal.z;
     float diffuseFactor = fmaxf(lightDirDotSurfaceNormal, 0.0f); // clamp so that any negative values are 0 bcos they woukd facing qwaay from light hence no lit
 
     // im,d represents light scatter in all dirs when a light source hits suface this must be done for all light source
@@ -267,34 +292,47 @@ __device__ void shadeSphere(unsigned char *pixels, int pixelIndex, float sphereD
     // Rm is the direction of the reflect ray from the point on the surface occuring from light source m
     // we can calc this by reflecting the light direction across the surface normal
     // both of which we have alr got
-    // incident vector reflection form is  
-    // R = 2 * (L . N) * N - L 
+    // incident vector reflection form is
+    // R = 2 * (L . N) * N - L
     // L is lightDirection X/Y/Z
     // N is surfaceNormal X/Y/Z
 
     // first calc (L . N)
-    float lightDotWithNormal = lightDirectionX * surfaceNormalX + lightDirectionY * surfaceNormalY + lightDirectionZ * surfaceNormalZ;
+    // float lightDotWithNormal = lightDirectionX * surfaceNormalX + lightDirectionY * surfaceNormalY + lightDirectionZ * surfaceNormalZ;
+
+    float lightDotWithNormal = lightDirection.x * surfaceNormal.x + lightDirection.y * surfaceNormal.y + lightDirection.z * surfaceNormal.z;
 
     // then to calc Rm we put our dot prod into our equation
-    // R = 2 * (L . N) * N - L 
-    float reflectDirX = 2.0f * lightDotWithNormal * surfaceNormalX - lightDirectionX;
-    float reflectDirY = 2.0f * lightDotWithNormal * surfaceNormalY - lightDirectionY;
-    float reflectDirZ = 2.0f * lightDotWithNormal * surfaceNormalZ - lightDirectionZ;
-    
+    // R = 2 * (L . N) * N - L
+    /*
+    float reflectDirX = 2.0f * lightDotWithNormal * surfaceNormal.x - lightDirection.x;
+    float reflectDirY = 2.0f * lightDotWithNormal * surfaceNormal.y - lightDirection.y;
+    float reflectDirZ = 2.0f * lightDotWithNormal * surfaceNormal.z - lightDirection.z;
+*/
+
+    Vec3 reflectDir = {(2.0f * lightDotWithNormal * surfaceNormal.x - lightDirection.x), (2.0f * lightDotWithNormal * surfaceNormal.y - lightDirection.y), (2.0f * lightDotWithNormal * surfaceNormal.z - lightDirection.z)};
 
     // now we need V which is dir pointing towards cam from hit point
-    float viewToHitX = camPos.x - hitPointX;
-    float viewToHitY = camPos.y - hitPointY;
-    float viewToHitZ = camPos.z - hitPointZ;
+    /*
+    float viewToHitX = camPos.x - hitPoint.x;
+    float viewToHitY = camPos.y - hitPoint.y;
+    float viewToHitZ = camPos.z - hitPoint.z;
+    */
 
+    Vec3 camToHit = {camPos.x - hitPoint.x, camPos.y - hitPoint.y, camPos.z - hitPoint.z};
     // normalise viewToHit to get V direction
-    float viewToHitLength = sqrtf(viewToHitX * viewToHitX + viewToHitY * viewToHitY + viewToHitZ * viewToHitZ);
+    float camToHitLength = sqrtf(camToHit.x * camToHit.x + camToHit.y * camToHit.y + camToHit.z * camToHit.z);
+
+    /*
     viewToHitX /= viewToHitLength;
     viewToHitY /= viewToHitLength;
     viewToHitZ /= viewToHitLength;
+    */
+
+    Vec3 camToHitDirection = {viewToHit.x / camToHitLength, viewToHit.y / camToHitLength, viewToHit.z / camToHitLength};
 
     // Rm and V we can calc (Rm . V)
-    float reflectDotView = reflectDirX * viewToHitX + reflectDirY * viewToHitY + reflectDirZ * viewToHitZ;
+    float reflectDotView = reflectDir.x * camToHitDirection.x + reflectDir.y * camToHitDirection.y + reflectDir.z * camToHitDirection.z;
     reflectDotView = fmaxf(reflectDotView, 0.0f); // again like diffuse we clamp to 0
 
     // a is shinnes factor
@@ -319,9 +357,9 @@ __device__ void shadeSphere(unsigned char *pixels, int pixelIndex, float sphereD
     // writing the colour to the pixel buffer the phongShading value is a multiplier to determine how much of sphere colour is visible
     // clamp colour values between 0/1 then multi 255 get value 0-255 for rgb
     // rgb referring to xyz respectively maybe il lsort this out so it makes more sense
-    pixels[pixelIndex + 0] = (unsigned char)((fminf(fmaxf(sphereRGB.x * phongShading, 0.0f), 1.0f))*255.0f);
-    pixels[pixelIndex + 1] = (unsigned char)((fminf(fmaxf(sphereRGB.y * phongShading, 0.0f), 1.0f))*255.0f);
-    pixels[pixelIndex + 2] = (unsigned char)((fminf(fmaxf(sphereRGB.z * phongShading, 0.0f), 1.0f))*255.0f);
+    pixels[pixelIndex + 0] = (unsigned char)((fminf(fmaxf(sphereRGB.x * phongShading, 0.0f), 1.0f)) * 255.0f);
+    pixels[pixelIndex + 1] = (unsigned char)((fminf(fmaxf(sphereRGB.y * phongShading, 0.0f), 1.0f)) * 255.0f);
+    pixels[pixelIndex + 2] = (unsigned char)((fminf(fmaxf(sphereRGB.z * phongShading, 0.0f), 1.0f)) * 255.0f);
     // this is the alpha channel which we set to 255 for fully opaque
     // however can be used for trasparency
     pixels[pixelIndex + 3] = 255;
@@ -336,54 +374,76 @@ __device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundD
     // Ip = A + D
 
     /* COPIED FROM shadeSphere */
-    // A = ka * ia
-    float ka = 0.2f;
-    float ia = 0.1f;
+    float ka = 0.35f;
+    float ia = 0.2f;
+    float ambientStrength = ka * ia;
 
-    float ambientStrength = ka * ia; // TESTING VALUE
+    // will require a loop later to add the diffuse and specular for all light sources we can ignore the sum
+    // reding our equation to
+    // Ip = A + D + S
 
     // D = kd * (Lm . N)* im,d
-    float kd = 0.7f;
+    float kd = 0.65f;
 
     // Lm is the direction from the point on surface to the light
     // we have the distance from the cam to the hit point
+
+    /* IT NOW WORKS WITH THE BASIC XYZ VEC3 STRUCTURE  ADDED IT FOR THE THE SIMPLE COORDS NOW USING IT FOR MORE COMPLEX COORDS KEEPIN THE OG CODE JUST IN CASE*/
 
     // in the ray intersect func we worked out the distance from cam to the hit point
     // we can use this to work out the coordinates of hit point on the surface
     // multiplying ray dir by the distance gives vector from cam to point
     // technically we dont need to add cam pos as cam is at orgin but may be useful if we want to move cam
-    float hitPointX = camPos.x + rayDir.x * groundDistance;
-    float hitPointY = camPos.y + rayDir.y * groundDistance;
-    float hitPointZ = camPos.z + rayDir.z * groundDistance;
+
+    /*
+    float hitPointX = camPos.x + rayDir.x * sphereDistance;
+    float hitPointY = camPos.y + rayDir.y * sphereDistance;
+    float hitPointZ = camPos.z + rayDir.z * sphereDistance;
+    */
+
+    Vec3 hitPoint = {(camPos.x + rayDir.x * groundDistance), (camPos.y + rayDir.y * groundDistance), (camPos.z + rayDir.z * groundDistance)};
 
     // now we have the hit coords we can work out light distance and direction
     // lightToHit vector now contains distance and direction from hit point to light source
+
+    /*
     float lightToHitX = lightPos.x - hitPointX;
     float lightToHitY = lightPos.y - hitPointY;
     float lightToHitZ = lightPos.z - hitPointZ;
+    */
+
+    // could introduce function for addition subtraction but leave it for now
+    Vec3 lightToHit = {(lightPos.x - hitPoint.x), (lightPos.y - hitPoint.y), (lightPos.z - hitPoint.z)};
 
     // we normalise the lightToHit vector to only have direction vecotr
 
     // to normalise the vector norm(u) = u / magnitude of (u)
     // mag which is sqrt(x^2 + y^2 + z^2)
+
+    /*
     float lightDirectionLength = sqrtf(lightToHitX * lightToHitX + lightToHitY * lightToHitY + lightToHitZ * lightToHitZ);
     float lightDirectionX = lightToHitX / lightDirectionLength;
     float lightDirectionY = lightToHitY / lightDirectionLength;
     float lightDirectionZ = lightToHitZ / lightDirectionLength;
+    */
 
-    // now we have the lightDirection X/Y/Z vector aka Lm
+    float lightDirectionLength = sqrtf(lightToHit.x * lightToHit.x + lightToHit.y * lightToHit.y + lightToHit.z * lightToHit.z);
+    Vec3 lightDirection = {(lightToHit.x / lightDirectionLength), (lightToHit.y / lightDirectionLength), (lightToHit.z / lightDirectionLength)};
 
     // for the ground we know the normal is always pointing up as its a flat plane on the xz axis
+    /*
     float surfaceNormalX = 0.0f;
     float surfaceNormalY = 1.0f;
     float surfaceNormalZ = 0.0f;
+    */
 
+    Vec3 surfaceNormal = {0.0f, 1.0f, 0.0f};
     // Lm is lightDir XYZ
     // N is surfaceNormal XYZ
 
     // now we have (Lm . N) we can calc diffuse factor
-    float diffuseFactor = lightDirectionX * surfaceNormalX + lightDirectionY * surfaceNormalY + lightDirectionZ * surfaceNormalZ;
-    diffuseFactor = fmaxf(diffuseFactor, 0.0f); // clamp so that any negative values are 0 bcos they woukd facing qwaay from light hence no lit
+    float lightDirDotSurfaceNormal = lightDirection.x * surfaceNormal.x + lightDirection.y * surfaceNormal.y + lightDirection.z * surfaceNormal.z;
+    float diffuseFactor = fmaxf(lightDirDotSurfaceNormal, 0.0f); // clamp so that any negative values are 0 bcos they woukd facing qwaay from light hence no lit
 
     // im,d represents light scatter in all dirs when a light source hits suface this must be done for all light source
     // for now we only have one so we can ignore for now but later must add within the loop for all light sources
@@ -401,7 +461,7 @@ __device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundD
     // Ip = A + D
 
     float phongShading = ambientStrength + diffuseStrength;
-    phongShading = fminf(phongShading, 1.0f); 
+    phongShading = fminf(phongShading, 1.0f);
 
     // implentning checkboard pattern to show off ground more clearly
 
@@ -416,20 +476,19 @@ __device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundD
 
     // if both are even or both are odd we make one colour otherwise we make the other colour
 
-    
     if ((checkX % 2 == 0 && checkZ % 2 == 0) || (checkX % 2 != 0 && checkZ % 2 != 0))
     {
         // just liek sphjerw shade xyz repsect rgb
-        groundRBG.x *= 0.5f;  
-        groundRBG.y *= 0.5f; 
-        groundRBG.z *= 0.5f; 
+        groundRBG.x *= 0.5f;
+        groundRBG.y *= 0.5f;
+        groundRBG.z *= 0.5f;
     }
     else
     {
         // odd tile colour
-        groundRBG.x *= 1.0f;  
+        groundRBG.x *= 1.0f;
         groundRBG.y *= 1.0f;
-        groundRBG.z *= 1.0f; 
+        groundRBG.z *= 1.0f;
     }
 
     pixels[pixelIndex + 0] = (unsigned char)(groundRBG.x * phongShading * 255.0f);
@@ -438,7 +497,7 @@ __device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundD
     pixels[pixelIndex + 3] = 255;
 }
 
-// for the background gradient based on the ray direction 
+// for the background gradient based on the ray direction
 
 __device__ void shadeBackground(unsigned char *pixels, int pixelIndex, Vec3 rayDir)
 {
@@ -450,7 +509,7 @@ __device__ void shadeBackground(unsigned char *pixels, int pixelIndex, Vec3 rayD
     // white gradient
     pixels[pixelIndex + 0] = (unsigned char)(255.0f * (1.0f - backgroundDiffuse));
     pixels[pixelIndex + 1] = (unsigned char)(255.0f * (1.0f - backgroundDiffuse));
-    pixels[pixelIndex + 2] = (unsigned char)(255.0f * (1.0f - backgroundDiffuse)); 
+    pixels[pixelIndex + 2] = (unsigned char)(255.0f * (1.0f - backgroundDiffuse));
     pixels[pixelIndex + 3] = 255;
 }
 
@@ -464,7 +523,7 @@ __global__ void renderKernel(unsigned char *pixels, int screenWidth, int screenH
 
     if (pixelX >= screenWidth || pixelY >= screenHeight)
         return;
-    
+
     Vec3 camPos = {0.0f, 0.0f, 0.0f};
     Vec3 lightPos = {3.0f, 3.0f, 2.0f};
     Vec3 spherePos = {0.0f, 0.0f, -3.0f};
@@ -481,11 +540,9 @@ __global__ void renderKernel(unsigned char *pixels, int screenWidth, int screenH
 
     Vec3 rayDir = {normalX * viewPortWidth, normalY * viewPortHeight, -1.0f};
 
-
-
     // normalise the ray direction
-    // ;ater make this a unc 
-    float rayDirLen = sqrtf(rayDir.x * rayDir.x + rayDir.y* rayDir.y + rayDir.z * rayDir.z);
+    // ;ater make this a unc
+    float rayDirLen = sqrtf(rayDir.x * rayDir.x + rayDir.y * rayDir.y + rayDir.z * rayDir.z);
     rayDir.x /= rayDirLen;
     rayDir.y /= rayDirLen;
     rayDir.z /= rayDirLen;
@@ -515,7 +572,6 @@ __global__ void renderKernel(unsigned char *pixels, int screenWidth, int screenH
         shadeBackground(pixels, pixelIndex, rayDir);
     }
 }
-
 
 // shader read func from https://learnopengl.com/Getting-started/Shaders
 std::string readShader(const char *path)
@@ -672,7 +728,6 @@ int main()
     // 256 threads per block (16x16)
     dim3 blockSize(16, 16);
     dim3 gridSize((screenWidth + blockSize.x - 1) / blockSize.x, (screenHeight + blockSize.y - 1) / blockSize.y);
-    
 
     while (!glfwWindowShouldClose(win))
     {
@@ -683,8 +738,6 @@ int main()
         // clear screen
         glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-
-        
 
         renderKernel<<<gridSize, blockSize>>>(devicePixels, screenWidth, screenHeight);
 
