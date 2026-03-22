@@ -1,9 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"C:/Users/callu/OneDrive/Documents/GitHub/CudaRayTracer/build/cmake_install.cmake",
-		"C:/Users/callu/OneDrive/Documents/GitHub/CudaRayTracer/build/import/glfw-3.4/cmake_install.cmake",
-		"C:/Users/callu/OneDrive/Documents/GitHub/CudaRayTracer/build/import/glfw-3.4/src/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
