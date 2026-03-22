@@ -329,7 +329,7 @@ __device__ void shadeSphere(unsigned char *pixels, int pixelIndex, float sphereD
     viewToHitZ /= viewToHitLength;
     */
 
-    Vec3 camToHitDirection = {viewToHit.x / camToHitLength, viewToHit.y / camToHitLength, viewToHit.z / camToHitLength};
+    Vec3 camToHitDirection = {camToHit.x / camToHitLength, camToHit.y / camToHitLength, camToHit.z / camToHitLength};
 
     // Rm and V we can calc (Rm . V)
     float reflectDotView = reflectDir.x * camToHitDirection.x + reflectDir.y * camToHitDirection.y + reflectDir.z * camToHitDirection.z;
@@ -367,7 +367,7 @@ __device__ void shadeSphere(unsigned char *pixels, int pixelIndex, float sphereD
 
 // shading of the ground is similar to sphere
 // we dont really need specular for the ground as its a matte surface
-__device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundDistance, Vec3 rayDir, Vec3 camPos, Vec3 lightPos, Vec3 groundRBG)
+__device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundDistance, Vec3 rayDir, Vec3 camPos, Vec3 lightPos, Vec3 groundRGB)
 {
     // as we ignore specular
     // the equation simplifies to
@@ -471,29 +471,29 @@ __device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundD
     // using the hit point coords we can determine which tile we are on diving hit point by tile size
     // creating an int for the tiles in x and z axis as the ground is flat on the xz plane
     // even or odd tiles will be different colours to create a pattern
-    int checkX = (int)(hitPointX / tileSize);
-    int checkZ = (int)(hitPointZ / tileSize);
+    int checkX = (int)(hitPoint.x / tileSize);
+    int checkZ = (int)(hitPoint.z / tileSize);
 
     // if both are even or both are odd we make one colour otherwise we make the other colour
 
     if ((checkX % 2 == 0 && checkZ % 2 == 0) || (checkX % 2 != 0 && checkZ % 2 != 0))
     {
         // just liek sphjerw shade xyz repsect rgb
-        groundRBG.x *= 0.5f;
-        groundRBG.y *= 0.5f;
-        groundRBG.z *= 0.5f;
+        groundRGB.x *= 0.5f;
+        groundRGB.y *= 0.5f;
+        groundRGB.z *= 0.5f;
     }
     else
     {
         // odd tile colour
-        groundRBG.x *= 1.0f;
-        groundRBG.y *= 1.0f;
-        groundRBG.z *= 1.0f;
+        groundRGB.x *= 1.0f;
+        groundRGB.y *= 1.0f;
+        groundRGB.z *= 1.0f;
     }
 
-    pixels[pixelIndex + 0] = (unsigned char)(groundRBG.x * phongShading * 255.0f);
-    pixels[pixelIndex + 1] = (unsigned char)(groundRBG.y * phongShading * 255.0f);
-    pixels[pixelIndex + 2] = (unsigned char)(groundRBG.z * phongShading * 255.0f);
+    pixels[pixelIndex + 0] = (unsigned char)(groundRGB.x * phongShading * 255.0f);
+    pixels[pixelIndex + 1] = (unsigned char)(groundRGB.y * phongShading * 255.0f);
+    pixels[pixelIndex + 2] = (unsigned char)(groundRGB.z * phongShading * 255.0f);
     pixels[pixelIndex + 3] = 255;
 }
 
