@@ -1,0 +1,38 @@
+{
+	"tasks": [
+		{
+			"label": "Build and Run Raytracer",
+			"type": "shell",
+			"command": "\"C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat\" && cmake --build ${workspaceFolder}/build && cd ${workspaceFolder}/build && rayTracer.exe",
+			"problemMatcher": [],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"options": {
+				"shell": {
+					"executable": "cmd.exe",
+					"args": [
+						"/d",
+						"/c"
+					]
+				}
+			}
+		},
+		{
+			"label": "Clean and Reconfigure CMake",
+			"type": "shell",
+			"command": "\"C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat\" && if exist build (rmdir /s /q build) && cmake -G Ninja -S . -B build -DCMAKE_CUDA_COMPILER=\"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1/bin/nvcc.exe\"",
+			"options": {
+				"shell": {
+					"executable": "cmd.exe",
+					"args": [
+						"/d",
+						"/c"
+					]
+				}
+			}
+		}
+	],
+	"version": "2.0.0"
+}
