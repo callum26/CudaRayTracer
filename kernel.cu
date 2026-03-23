@@ -14,10 +14,35 @@ struct Vec3
 {
     float x, y, z;
 
-    // dot product of two vectors
+    // calculations for vector maths
+
     __device__ float dot(const Vec3 &otherVec3) const
     {
-        return x * otherVec3.x + y * otherVec3.y + z * otherVec3.z;
+        return (x * otherVec3.x) + (y * otherVec3.y) + (z * otherVec3.z);
+    }
+
+    // sub
+    __device__ float sub(const Vec3 &otherVec3) const
+    {
+        return x - otherVec3.x, y - otherVec3.y, z - otherVec3.z;
+    }
+
+    // pos
+    __device__ float add(const Vec3 &otherVec3) const
+    {
+        return x + otherVec3.x, y + otherVec3.y, z + otherVec3.z;
+    }
+
+    // div
+    __device__ float div(const Vec3 &otherVec3) const
+    {
+        return x / otherVec3.x, y / otherVec3.y, z / otherVec3.z;
+    }
+
+    // multi
+    __device__ float multi(const Vec3 &otherVec3) const
+    {
+        return x * otherVec3.x, y * otherVec3.y, z * otherVec3.z;
     }
 };
 
@@ -209,7 +234,8 @@ __device__ void shadeSphere(unsigned char *pixels, int pixelIndex, float sphereD
     // we can use this to work out the coordinates of hit point on the surface
     // multiplying ray dir by the distance gives vector from cam to point
     // technically we dont need to add cam pos as cam is at orgin but may be useful if we want to move cam
-    Vec3 hitPoint = {(camPos.x + rayDir.x * sphereDistance), (camPos.y + rayDir.y * sphereDistance), (camPos.z + rayDir.z * sphereDistance)};
+    // Vec3 hitPoint = {(camPos.x + rayDir.x * sphereDistance), (camPos.y + rayDir.y * sphereDistance), (camPos.z + rayDir.z * sphereDistance)};
+    Vec3 hitPoint = {camPos.add(rayDir * sphereDistance)}
 
     // now we have the hit coords we can work out light distance and direction
     // lightToHit vector now contains distance and direction from hit point to light source
