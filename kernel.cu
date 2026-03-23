@@ -22,27 +22,32 @@ struct Vec3
     }
 
     // sub
-    __device__ float sub(const Vec3 &otherVec3) const
+    __device__ Vec3 sub(const Vec3 &otherVec3) const
     {
-        return x - otherVec3.x, y - otherVec3.y, z - otherVec3.z;
+        return {x - otherVec3.x, y - otherVec3.y, z - otherVec3.z};
     }
 
     // pos
-    __device__ float add(const Vec3 &otherVec3) const
+    __device__ Vec3 add(const Vec3 &otherVec3) const
     {
-        return x + otherVec3.x, y + otherVec3.y, z + otherVec3.z;
+        return {x + otherVec3.x, y + otherVec3.y, z + otherVec3.z};
     }
 
     // div
-    __device__ float div(const Vec3 &otherVec3) const
+    __device__ Vec3 div(const Vec3 &otherVec3) const
     {
-        return x / otherVec3.x, y / otherVec3.y, z / otherVec3.z;
+        return {x / otherVec3.x, y / otherVec3.y, z / otherVec3.z};
     }
 
     // multi
-    __device__ float multi(const Vec3 &otherVec3) const
+    __device__ Vec3 multi(const Vec3 &otherVec3) const
     {
-        return x * otherVec3.x, y * otherVec3.y, z * otherVec3.z;
+        return {x * otherVec3.x, y * otherVec3.y, z * otherVec3.z};
+    }
+
+    __device__ Vec3 addWithScalar(const Vec3 &otherVec3, const float scalar) const
+    {
+        return {x + otherVec3.x * scalar, y + otherVec3.y * scalar, z + otherVec3.z * scalar};
     }
 };
 
@@ -235,7 +240,7 @@ __device__ void shadeSphere(unsigned char *pixels, int pixelIndex, float sphereD
     // multiplying ray dir by the distance gives vector from cam to point
     // technically we dont need to add cam pos as cam is at orgin but may be useful if we want to move cam
     // Vec3 hitPoint = {(camPos.x + rayDir.x * sphereDistance), (camPos.y + rayDir.y * sphereDistance), (camPos.z + rayDir.z * sphereDistance)};
-    Vec3 hitPoint = {camPos.add(rayDir * sphereDistance)}
+    Vec3 hitPoint = {camPos.addWithScalar(rayDir, sphereDistance)};
 
     // now we have the hit coords we can work out light distance and direction
     // lightToHit vector now contains distance and direction from hit point to light source
