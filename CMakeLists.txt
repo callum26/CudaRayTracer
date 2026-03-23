@@ -25,3 +25,5 @@ target_include_directories(rayTracer PRIVATE
     import/glfw-3.4/include
 )
 target_link_libraries(rayTracer PRIVATE glfw glad opengl32)
+
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/shaders DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
