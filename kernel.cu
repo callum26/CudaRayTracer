@@ -9,10 +9,16 @@ const unsigned int screenHeight = 800;
 // introducing structs to simplify the length of code
 // used to store 3 coords 3d scructyuire
 // common namming convench online Vector 3
-// later may put vec4 used for the pixel datas
+// later may put something for used  the pixel datas
 struct Vec3
 {
     float x, y, z;
+
+    // dot product of two vectors
+    __device__ float dot(const Vec3 &other) const
+    {
+        return x * other.x + y * other.y + z * other.z;
+    }
 };
 
 // from my reading on https://www.scratchapixel.com/lessons/3d-basic-rendering/minimal-ray-tracer-rendering-simple-shapes/ray-sphere-intersection
@@ -63,7 +69,9 @@ __device__ bool raySphereIntersection(Vec3 camPos, Vec3 spherePos, float sphereR
 
     // a = D . D
     // dot product of the ray direction with itself
-    float a = rayDir.x * rayDir.x + rayDir.y * rayDir.y + rayDir.z * rayDir.z;
+    // float a = rayDir.x * rayDir.x + rayDir.y * rayDir.y + rayDir.z * rayDir.z;
+
+    float a = rayDir.dot(rayDir);
 
     // b = L . D
     // dot product of the length of vector from origin to center with the rayDirection
