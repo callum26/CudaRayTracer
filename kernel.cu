@@ -300,7 +300,7 @@ __device__ float calculateDiffuse(Vec3 camPos, Vec3 rayDir, Vec3 lightPos, float
 
 // was cuasingh issues using both the same equations for calculating the diffuse
 // the surface normal cannot be calculated the same way as for the sphere it was sillyto d it
-// this is temporary solution for now 
+// this is temporary solution for now
 /* COULD INSTEAD PASS IN THE NORMAL IN FUNC TO SAVE SPACE*/
 __device__ float calculateGroundDiffuse(Vec3 camPos, Vec3 rayDir, Vec3 lightPos, float groundDistance)
 {
@@ -309,7 +309,6 @@ __device__ float calculateGroundDiffuse(Vec3 camPos, Vec3 rayDir, Vec3 lightPos,
     float imd = 1.0f;
 
     Vec3 hitPoint = camPos.add(rayDir.scale(groundDistance));
-
 
     Vec3 lightDirection = lightPos.sub(hitPoint).normalise();
 
@@ -434,7 +433,6 @@ __device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundD
 
     // implentning checkboard pattern to show off ground more clearly
 
-   
     float tileSize = 1.0f;
     // had to introduced an offset for the tiles as they were mirrored centring coming from the middle
     // meaning the there was two of the same tiles in the middle
@@ -446,8 +444,8 @@ __device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundD
     // creating an int for the tiles in x and z axis as the ground is flat on the xz plane
     // even or odd tiles will be different colours to create a pattern
 
-    // solved the issue by adding an offset 1/2 a tile 
-    // changed it to floor instead to round down 
+    // solved the issue by adding an offset 1/2 a tile
+    // changed it to floor instead to round down
     int checkX = floor((hitPoint.x + checkerOffsetX) / tileSize);
     int checkZ = floor((hitPoint.z + checkerOffsetZ) / tileSize);
 
@@ -551,23 +549,19 @@ __global__ void renderKernel(unsigned char *pixels, int screenWidth, int screenH
 
 // all basically the same now the host launches this function with the included host pixel  buffer
 // allocates the same stuff as before just seperates the host and device logic
-float launchRayTracer(unsigned char *hostPixels, int screenWidth, int screenHeight)
+float launchRayTracer(unsigned char *hostPixels, int screenWidth, int screenHeight, unsigned char *devicePixels)
 {
     // going to start implementation of performance stats
     // https://developer.nvidia.com/blog/how-implement-performance-metrics-cuda-cc/
-    // as mentioned on the nvidia blog its better to use the inbuilt functions for timings in cuda instead of 
-    // cpu timings 
+    // as mentioned on the nvidia blog its better to use the inbuilt functions for timings in cuda instead of
+    // cpu timings
     // the way on the blog is the best way to go about it
 
-    // starting both the cuda events 
+    // starting both the cuda events
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
-
-
-    // allocate device pixel buffer
-    unsigned char *devicePixels;
     cudaMalloc(&devicePixels, screenWidth * screenHeight * 4);
 
     // 256 threads per block (16x16)
@@ -578,14 +572,13 @@ float launchRayTracer(unsigned char *hostPixels, int screenWidth, int screenHeig
     cudaEventRecord(start);
     renderKernel<<<gridSize, blockSize>>>(devicePixels, screenWidth, screenHeight);
     cudaEventRecord(stop);
-    // stops and fills records once its finished 
-    
-    cudaDeviceSynchronize();
+    // stops and fills records once its finished
 
+    cudaDeviceSynchronize();
 
     cudaMemcpy(hostPixels, devicePixels, screenWidth * screenHeight * 4, cudaMemcpyDeviceToHost);
 
-    // forcing cpu to halt until gpu finishes 
+    // forcing cpu to halt until gpu finishes
     cudaEventSynchronize(stop);
     float ms = 0;
     // calcs the difference
@@ -594,10 +587,8 @@ float launchRayTracer(unsigned char *hostPixels, int screenWidth, int screenHeig
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
 
-
     // cleanup
     cudaFree(devicePixels);
-    
 
     return ms;
 }

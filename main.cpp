@@ -159,6 +159,7 @@ int main()
     // move the calculation of host pixel buffer solely with cpp
 
     unsigned char *hostPixels = new unsigned char[screenWidth * screenHeight * 4];
+    unsigned char *devicePixels;
 
     while (!glfwWindowShouldClose(win))
     {
@@ -171,7 +172,7 @@ int main()
         glClear(GL_COLOR_BUFFER_BIT);
 
         // instead of launching the function it now returns ms time for frames
-        float frameTime = launchRayTracer(hostPixels, screenWidth, screenHeight);
+        float frameTime = launchRayTracer(hostPixels, screenWidth, screenHeight, devicePixels);
 
         std::string title = std::to_string(frameTime) + "ms";
         glfwSetWindowTitle(win, title.c_str());
@@ -191,6 +192,7 @@ int main()
     }
 
     delete[] hostPixels;
+    freeDevicePixels(devicePixels);
     glfwTerminate();
     return 0;
 }

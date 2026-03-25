@@ -1,1 +1,1 @@
-float launchRayTracer(unsigned char* hostPixels, int screenWidth, int screenHeight);
+float launchRayTracer(unsigned char *hostPixels, int screenWidth, int screenHeight, unsigned char *devicePixels);
