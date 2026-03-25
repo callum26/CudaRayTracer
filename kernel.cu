@@ -247,6 +247,7 @@ __device__ float calculateAmbient()
 }
 
 __device__ float calculateDiffuse(Vec3 camPos, Vec3 rayDir, Vec3 lightPos, float distanceToObject, Vec3 objectPos)
+
 {
     // D = kd * (Lm . N)* im,d
     float kd = 0.65f;
@@ -273,10 +274,10 @@ __device__ float calculateDiffuse(Vec3 camPos, Vec3 rayDir, Vec3 lightPos, float
 
     // to calculate N (surface normal) we calculate vector from center of sphere to hit point then normal it
     // again surfaceNormal currently is both direction and distance normalising will give us soley the direction
-    Vec3 sphereToHit = hitPoint.sub(objectPos);
+    Vec3 objectToHit = hitPoint.sub(objectPos);
 
     // we do same as light direct to normal the surface normal
-    Vec3 surfaceNormal = sphereToHit.normalise();
+    Vec3 surfaceNormal = objectToHit.normalise();
 
     // Lm is lightDir XYZ
     // N is surfaceNormal XYZ
@@ -295,6 +296,29 @@ __device__ float calculateDiffuse(Vec3 camPos, Vec3 rayDir, Vec3 lightPos, float
     float diffuseStrength = kd * diffuseFactor * imd;
 
     return diffuseStrength;
+}
+
+// was cuasingh issues using both the same equations for calculating the diffuse
+// the surface normal cannot be calculated the same way as for the sphere it was sillyto d it
+// this is temporary solution for now 
+/* COULD INSTEAD PASS IN THE NORMAL IN FUNC TO SAVE SPACE*/
+__device__ float calculateGroundDiffuse(Vec3 camPos, Vec3 rayDir, Vec3 lightPos, float groundDistance)
+{
+    float kd = 0.65f;
+
+    float imd = 1.0f;
+
+    Vec3 hitPoint = camPos.add(rayDir.scale(groundDistance));
+
+
+    Vec3 lightDirection = lightPos.sub(hitPoint).normalise();
+
+    // no need to work out the ground normal as its the same everytime
+    Vec3 groundNormal = {0.0f, 1.0f, 0.0f};
+    float diffuseFactor = fmaxf(lightDirection.dot(groundNormal), 0.0f);
+
+    // all thesmae baiscally
+    return kd * diffuseFactor * imd;
 }
 
 __device__ float calculateSpecular(Vec3 camPos, Vec3 rayDir, Vec3 lightPos, float distanceToObject, Vec3 objectPos)
@@ -400,7 +424,7 @@ __device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundD
 {
     float ambientStrength = calculateAmbient();
 
-    float diffuseStrength = calculateDiffuse(camPos, rayDir, lightPos, groundDistance, groundPos);
+    float diffuseStrength = calculateGroundDiffuse(camPos, rayDir, lightPos, groundDistance);
 
     // as we ignore specular
     // the equation simplifies to
@@ -410,15 +434,22 @@ __device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundD
 
     // implentning checkboard pattern to show off ground more clearly
 
-    // may change later
-    int tileSize = 1;
+   
+    float tileSize = 1.0f;
+    // had to introduced an offset for the tiles as they were mirrored centring coming from the middle
+    // meaning the there was two of the same tiles in the middle
+    float checkerOffsetX = 0.5f;
+    float checkerOffsetZ = 0.5f;
 
     Vec3 hitPoint = camPos.add(rayDir.scale(groundDistance));
     // using the hit point coords we can determine which tile we are on diving hit point by tile size
     // creating an int for the tiles in x and z axis as the ground is flat on the xz plane
     // even or odd tiles will be different colours to create a pattern
-    int checkX = (int)(hitPoint.x / tileSize);
-    int checkZ = (int)(hitPoint.z / tileSize);
+
+    // solved the issue by adding an offset 1/2 a tile 
+    // changed it to floor instead to round down 
+    int checkX = floor((hitPoint.x + checkerOffsetX) / tileSize);
+    int checkZ = floor((hitPoint.z + checkerOffsetZ) / tileSize);
 
     // if both are even or both are odd we make one colour otherwise we make the other colour
 
