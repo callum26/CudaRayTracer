@@ -551,8 +551,21 @@ __global__ void renderKernel(unsigned char *pixels, int screenWidth, int screenH
 
 // all basically the same now the host launches this function with the included host pixel  buffer
 // allocates the same stuff as before just seperates the host and device logic
-void launchRayTracer(unsigned char *hostPixels, int screenWidth, int screenHeight)
+float launchRayTracer(unsigned char *hostPixels, int screenWidth, int screenHeight)
 {
+    // going to start implementation of performance stats
+    // https://developer.nvidia.com/blog/how-implement-performance-metrics-cuda-cc/
+    // as mentioned on the nvidia blog its better to use the inbuilt functions for timings in cuda instead of 
+    // cpu timings 
+    // the way on the blog is the best way to go about it
+
+    // starting both the cuda events 
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+
+
     // allocate device pixel buffer
     unsigned char *devicePixels;
     cudaMalloc(&devicePixels, screenWidth * screenHeight * 4);
@@ -561,11 +574,30 @@ void launchRayTracer(unsigned char *hostPixels, int screenWidth, int screenHeigh
     dim3 blockSize(16, 16);
     dim3 gridSize((screenWidth + blockSize.x - 1) / blockSize.x, (screenHeight + blockSize.y - 1) / blockSize.y);
 
+    // begins once the kernel is launch
+    cudaEventRecord(start);
     renderKernel<<<gridSize, blockSize>>>(devicePixels, screenWidth, screenHeight);
+    cudaEventRecord(stop);
+    // stops and fills records once its finished 
+    
     cudaDeviceSynchronize();
+
 
     cudaMemcpy(hostPixels, devicePixels, screenWidth * screenHeight * 4, cudaMemcpyDeviceToHost);
 
+    // forcing cpu to halt until gpu finishes 
+    cudaEventSynchronize(stop);
+    float ms = 0;
+    // calcs the difference
+    cudaEventElapsedTime(&ms, start, stop);
+
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
+
     // cleanup
     cudaFree(devicePixels);
+    
+
+    return ms;
 }

@@ -170,8 +170,11 @@ int main()
         glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        //
-        launchRayTracer(hostPixels, screenWidth, screenHeight);
+        // instead of launching the function it now returns ms time for frames
+        float frameTime = launchRayTracer(hostPixels, screenWidth, screenHeight);
+
+        std::string title = std::to_string(frameTime) + "ms";
+        glfwSetWindowTitle(win, title.c_str());
 
         // upload pixel data to texture took this from opengl graphics project in year2
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, screenWidth, screenHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, hostPixels);
