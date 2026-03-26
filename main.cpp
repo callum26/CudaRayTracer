@@ -100,7 +100,7 @@ int main()
 
     glfwMakeContextCurrent(win);
 
-    // turn off vsync 
+    // turn off vsync
     glfwSwapInterval(0);
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
@@ -164,14 +164,9 @@ int main()
     unsigned char *hostPixels = new unsigned char[screenWidth * screenHeight * 4];
     initDevicePixel(screenWidth, screenHeight);
 
-    
-
-    // simple fps counter
-    float lastTime = glfwGetTime();
-    int frameCount = 0;
-
     while (!glfwWindowShouldClose(win))
     {
+        float frameStart = glfwGetTime();
 
         if (glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS)
             glfwSetWindowShouldClose(win, true);
@@ -180,10 +175,9 @@ int main()
         glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // instead of launching the function it now returns ms time for frames
-        float frameTime = launchRayTracer(hostPixels, screenWidth, screenHeight);
+        // instead of only launching void function it now returns ms time for frames
+        float gpuMs = launchRayTracer(hostPixels, screenWidth, screenHeight);
 
-        
         // upload pixel data to texture took this from opengl graphics project in year2
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, screenWidth, screenHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, hostPixels);
 
@@ -197,15 +191,15 @@ int main()
         glfwSwapBuffers(win);
         glfwPollEvents();
 
-        frameCount++;
-        double currentTime = glfwGetTime();
-        if (currentTime - lastTime >= 1.0) {
-            
-            std::string title = "CUDA Ray Tracer | FPS: " +  std::to_string(frameCount);
-            glfwSetWindowTitle(win, title.c_str());
-            frameCount = 0;
-            lastTime = currentTime;
-        }
+        float frameEnd = glfwGetTime();
+
+        // full frame time include GPU processing ime
+        float totalMs = (float)((frameEnd - frameStart) * 1000.0f);
+        float fps = 1000.0f / totalMs;
+
+        char title[64];
+        printf(title, "CUDA Ray Tracer | FPS: %", fps);
+        glfwSetWindowTitle(win, title);
     }
 
     // cleanup
