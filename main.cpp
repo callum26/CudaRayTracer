@@ -163,6 +163,8 @@ int main()
 
     unsigned char *hostPixels = new unsigned char[screenWidth * screenHeight * 4];
     initDevicePixel(screenWidth, screenHeight);
+    
+    float statsTimer = 0.0f; 
 
     while (!glfwWindowShouldClose(win))
     {
@@ -197,9 +199,15 @@ int main()
         float totalMs = (float)((frameEnd - frameStart) * 1000.0f);
         float fps = 1000.0f / totalMs;
 
-        char title[64];
-        printf(title, "CUDA Ray Tracer | FPS: %", fps);
-        glfwSetWindowTitle(win, title);
+        statsTimer += totalMs / 1000.0f;
+        if (statsTimer >= 0.1)
+        {
+            char title[64];
+            // stores it in a suitabke buffer
+            snprintf(title, sizeof(title) ,"CUDA Ray Tracer | FPS: %6.0f | Frame: %6.2fms | GPU: %6.2fms" , fps, totalMs, gpuMs);
+            glfwSetWindowTitle(win, title);
+            statsTimer = 0.0f;
+        }
     }
 
     // cleanup

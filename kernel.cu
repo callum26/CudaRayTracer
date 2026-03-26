@@ -515,7 +515,7 @@ __global__ void renderKernel(unsigned char *pixels, int screenWidth, int screenH
 
     // normalise the ray direction
     // ;ater make this a unc
-    float rayDirLen = rayDir.normalise();
+    Vec3 rayDirLen = rayDir.normalise();
 
     float sphereDistance = INFINITY;
     bool hitSphere = raySphereIntersection(camPos, spherePos, sphereRadius, rayDir, sphereDistance);
