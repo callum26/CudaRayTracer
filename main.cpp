@@ -100,6 +100,9 @@ int main()
 
     glfwMakeContextCurrent(win);
 
+    // turn off vsync 
+    glfwSwapInterval(0);
+
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
     {
         printf("glad init failed\n");
@@ -159,7 +162,13 @@ int main()
     // move the calculation of host pixel buffer solely with cpp
 
     unsigned char *hostPixels = new unsigned char[screenWidth * screenHeight * 4];
-    unsigned char *devicePixels;
+    initDevicePixel(screenWidth, screenHeight);
+
+    
+
+    // simple fps counter
+    float lastTime = glfwGetTime();
+    int frameCount = 0;
 
     while (!glfwWindowShouldClose(win))
     {
@@ -172,11 +181,9 @@ int main()
         glClear(GL_COLOR_BUFFER_BIT);
 
         // instead of launching the function it now returns ms time for frames
-        float frameTime = launchRayTracer(hostPixels, screenWidth, screenHeight, devicePixels);
+        float frameTime = launchRayTracer(hostPixels, screenWidth, screenHeight);
 
-        std::string title = std::to_string(frameTime) + "ms";
-        glfwSetWindowTitle(win, title.c_str());
-
+        
         // upload pixel data to texture took this from opengl graphics project in year2
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, screenWidth, screenHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, hostPixels);
 
@@ -189,10 +196,22 @@ int main()
         // swap buffers and poll events
         glfwSwapBuffers(win);
         glfwPollEvents();
+
+        frameCount++;
+        double currentTime = glfwGetTime();
+        if (currentTime - lastTime >= 1.0) {
+            
+            std::string title = "CUDA Ray Tracer | FPS: " +  std::to_string(frameCount);
+            glfwSetWindowTitle(win, title.c_str());
+            frameCount = 0;
+            lastTime = currentTime;
+        }
     }
 
+    // cleanup
     delete[] hostPixels;
-    freeDevicePixels(devicePixels);
+    freeDevicePixels();
+
     glfwTerminate();
     return 0;
 }
