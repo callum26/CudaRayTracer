@@ -99,6 +99,7 @@ struct Object
 {
     Vec3 pos;
     Material mat;
+    float radius;
 };
 
 __device__ void writePixels(unsigned char *pixels, int pixelIndex, Object object, Vec3 phongShading)
@@ -117,7 +118,7 @@ __device__ void writePixels(unsigned char *pixels, int pixelIndex, Object object
 // then to shade that specific pixel based on point of intsect along with normal of surface at that point
 // also taking account the position of the light source in order to calculate the lighting components and therrefore colour of pixel
 
-__device__ bool raySphereIntersection(Vec3 camPos, Object sphere, float sphereRadius, Vec3 rayDir, float &sphereDistance)
+__device__ bool raySphereIntersection(Vec3 camPos, Object sphere, Vec3 rayDir, float &sphereDistance)
 {
 
     // implicit equation of a sphere with radius r centred at C = 0,0,0
@@ -169,7 +170,7 @@ __device__ bool raySphereIntersection(Vec3 camPos, Object sphere, float sphereRa
 
     // c = L . L
     // dot product of the length of vector from origin to center with inself sub the sphere radius sphere to make sure its equal to zero explained below
-    float c = sphereToOrigin.dot(sphereToOrigin) - (sphereRadius * sphereRadius);
+    float c = sphereToOrigin.dot(sphereToOrigin) - (sphere.radius * sphere.radius);
 
     // obviously quadratic equation is given as
     // x = (-b (+/-) sqr(b^2 - 4ac)) / 2a
@@ -388,22 +389,21 @@ __device__ bool isInShadow(Vec3 camPos, Vec3 rayDir, float distanceToObject, Lig
 {
     Vec3 hitPoint = camPos.add(rayDir.scale(distanceToObject));
     Vec3 lightDir = calcLightDir(hitPoint, light);
-    Vec3 surfaceNormal = calcSurfaceNormal(hitpoint, object);
-
-    Vec3 shadowOrigin = hitpoint.add(surfaceNormal);
+    Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, object);
+    Vec3 shadowOrigin = hitPoint.add(surfaceNormal.scale(0.001f));
     float shadowToLight = light.pos.sub(shadowOrigin).magnitude();
 
     float shadowSphereDistance;
-    if (raySphereIntersection(shadowOrigin, sphere, sphereRadius, rayDir, shadowSphereDistance))
+    if (raySphereIntersection(shadowOrigin, object, lightDir, shadowSphereDistance))
     {
-        if (shadowDistance < shadowToLight)
+        if (shadowSphereDistance < shadowToLight)
             return true;
     }
 
     float shadowGroundDistance;
-    if (rayPlaneIntersection(shadowOrigin, sphere, sphereRadius, rayDir, shadowGroundDistance))
+    if (rayPlaneIntersection(shadowOrigin, lightDir, object.pos.y, shadowGroundDistance))
     {
-        if (shadowDistance < shadowToLight)
+        if (shadowGroundDistance < shadowToLight)
             return true;
     }
 
@@ -419,14 +419,14 @@ __device__ bool isInShadow(Vec3 camPos, Vec3 rayDir, float distanceToObject, Lig
 // for now only ambient and diffual are used specular is more cmoplex and will be done later
 __device__ void shadeSphere(unsigned char *pixels, int pixelIndex, float sphereDistance, Vec3 rayDir, Vec3 camPos, Light light, Object sphere)
 {
-    Vec3 hitPoint = camPos.add(rayDir.scale(distanceToObject));
-    Vec3 surfaceNormal = calcSurfaceNormal(hitpoint, object);
+    Vec3 hitPoint = camPos.add(rayDir.scale(sphereDistance));
+    Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, sphere);
 
-    if (isInShadow(camPos, rayDir, distanceToObject, light, object))
+    if (isInShadow(camPos, rayDir, sphereDistance, light, sphere))
     {
-        // if its in the shadow only use ambient
+        // if its in the shadow only use ambient`
         Vec3 ambientStrength = calculateAmbient(light, sphere);
-        writePixels(pixels, pixelIndex, sphere, ambientStrength)
+        writePixels(pixels, pixelIndex, sphere, ambientStrength);
     }
     else
     {
@@ -540,7 +540,8 @@ __global__ void renderKernel(unsigned char *pixels, int screenWidth, int screenH
             0.7f,               // diffuseReflectivity
             0.5f,               // specularReflectivity
             24.0f               // shininess
-        }};
+        },
+        1.5f};
 
     Object ground = {
         {0.0f, -2.0f, 0.0f}, // pos
@@ -550,7 +551,8 @@ __global__ void renderKernel(unsigned char *pixels, int screenWidth, int screenH
             0.6f,               // diffuseReflectivity
             0.5f,               // specularReflectivity
             24.0f               // shininess
-        }};
+        },
+        0.0f};
 
     Object background = {
         {0.0f, 0.0f, 0.0f}, // pos // irrelasvant
@@ -560,9 +562,9 @@ __global__ void renderKernel(unsigned char *pixels, int screenWidth, int screenH
             0.7f,               // diffuseReflectivity
             0.5f,               // specularReflectivity
             24.0f               // shininess
-        }};
+        },
+        0.0f};
 
-    float sphereRadius = 1.5f;
     float groundNormalY = 1.0f;
 
     // map pixel coords between -0.5/0.5 for x and 0.5/-0.5 Y
@@ -576,13 +578,10 @@ __global__ void renderKernel(unsigned char *pixels, int screenWidth, int screenH
     rayDir = rayDir.normalise();
 
     float sphereDistance = INFINITY;
-    bool hitSphere = raySphereIntersection(camPos, sphere, sphereRadius, rayDir, sphereDistance);
+    bool hitSphere = raySphereIntersection(camPos, sphere, rayDir, sphereDistance);
 
     float groundDistance = INFINITY;
     bool hitGround = rayPlaneIntersection(camPos, rayDir, ground.pos.y, groundDistance);
-
-    float shadowDistance;
-    bool isInShadow = raySphereIntersection(shadowOrigin, sphere, sphereRadius, light, shadowDistance);
 
     int writeRow = (screenHeight - 1 - pixelY);
     int pixelIndex = (writeRow * screenWidth + pixelX) * 4;
