@@ -130,15 +130,6 @@
     __constant__ Object background;
 
 
-
-    __device__ void writePixels(unsigned char *pixels, int pixelIndex, Object object, Vec3 phongShading)
-    {
-        pixels[pixelIndex + 0] = (unsigned char)((fminf(fmaxf(object.mat.colour.x * phongShading.x, 0.0f), 1.0f)) * 255.0f);
-        pixels[pixelIndex + 1] = (unsigned char)((fminf(fmaxf(object.mat.colour.y * phongShading.y, 0.0f), 1.0f)) * 255.0f);
-        pixels[pixelIndex + 2] = (unsigned char)((fminf(fmaxf(object.mat.colour.z * phongShading.z, 0.0f), 1.0f)) * 255.0f);
-        pixels[pixelIndex + 3] = 255;
-    }
-
     // from my reading on https://www.scratchapixel.com/lessons/3d-basic-rendering/minimal-ray-tracer-rendering-simple-shapes/ray-sphere-intersection
     // a ray can be defed as a ray(t) = Origin + t * Direction
     // Origin is (camX, camY, camZ) and e Direction as (rayDirX, rayDirY, rayDirZ)
@@ -460,16 +451,15 @@
     // diffusal simulates light scattering when striking a surface, a matte appearance depending on angle of light source and surface normal surfaces facing light appear bright than ones not facing
     // specular uses bright highlights occuring when light reflects off smoth ir rough surface. a lot more dynamic than thte others
     // for now only ambient and diffual are used specular is more cmoplex and will be done later
-    __device__ void shadeSphere(unsigned char *pixels, int pixelIndex, float sphereDistance, Ray ray, Light light, Object sphere, Object ground)
+    __device__ Vec3 shadeSphere(unsigned char *pixels, int pixelIndex, float sphereDistance, Ray ray, Light light, Object sphere, Object ground)
     {
         Vec3 hitPoint = ray.origin.add(ray.rayDir.scale(sphereDistance));
         Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, sphere);
 
         if (isInShadow(hitPoint, surfaceNormal, light, sphere, ground))
         {
-            // if its in the shadow only use ambient`
-            Vec3 ambientStrength = calculateAmbient(light, sphere);
-            writePixels(pixels, pixelIndex, sphere, ambientStrength);
+            // if its in the shadow only use ambient
+            return calculateAmbient(light, sphere).multi(sphere.mat.colour);
         }
         else
         {
@@ -483,15 +473,14 @@
                 fminf((ambientStrength.y + diffuseStrength.y + specularStrength.y), 1.0f),
                 fminf((ambientStrength.z + diffuseStrength.z + specularStrength.z), 1.0f)};
 
-            writePixels(pixels, pixelIndex, sphere, phongShading);
+            return phongShading.multi(sphere.mat.colour);
         }
     }
 
     // shading of the ground is similar to sphere
     // we dont really need specular for the ground as its a matte surface
-    __device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundDistance, Ray ray, Light light, Object ground, Object sphere)
+    __device__ Vec3 shadeGround(unsigned char *pixels, int pixelIndex, float groundDistance, Ray ray, Light light, Object ground, Object sphere)
     {
-
         // implentning checkboard pattern to show off ground more clearly
 
         float tileSize = 1.0f;
@@ -528,8 +517,7 @@
         if (isInShadow(hitPoint, surfaceNormal, light, sphere, ground))
         {
             // if its in the shadow only use ambient`
-            Vec3 ambientStrength = calculateAmbient(light, ground);
-            writePixels(pixels, pixelIndex, ground, ambientStrength);
+            return calculateAmbient(light, ground).multi(ground.mat.colour);
         }
         else
         {
@@ -543,13 +531,13 @@
                 fminf((ambientStrength.z + diffuseStrength.z), 1.0f)
             };
 
-            writePixels(pixels, pixelIndex, ground, phongShading);
+            return phongShading.multi(ground.mat.colour);
         }
     }
 
     // for the background gradient based on the ray direction
 
-    __device__ void shadeBackground(unsigned char *pixels, int pixelIndex, Vec3 rayDir, Object background)
+    __device__ Vec3 shadeBackground(unsigned char *pixels, int pixelIndex, Vec3 rayDir, Object background)
     {
         // we can use the y of the ray direction to determine how much of the background colour to show
         // this works bcos y is btween -1 and 1 when normalised
@@ -560,7 +548,7 @@
             0.5f * (rayDir.z + 1),
         };
 
-        writePixels(pixels, pixelIndex, background, backgroundDiffuse);
+        return backgroundDiffuse.multi(background.mat.colour);
     }
 
     __global__ void renderKernel(unsigned char *pixels, int screenWidth, int screenHeight)
@@ -603,22 +591,31 @@
         int writeRow = (screenHeight - 1 - pixelY);
         int pixelIndex = (writeRow * screenWidth + pixelX) * 4;
 
+        Vec3 pixelColour = {0.0f, 0.0f, 0.0f};
+
         // hitSphere and hitGround are bools for determining whether a specifced ray hit the objects
         // they both also update their value for their respective distances whenever they run and return true
         if (hitSphere && (!hitGround || sphereDistance < groundDistance))
         {
 
-            shadeSphere(pixels, pixelIndex, sphereDistance, ray, light, sphere, ground);
+            pixelColour = shadeSphere(pixels, pixelIndex, sphereDistance, ray, light, sphere, ground);
         }
         else if (hitGround)
         {
-            shadeGround(pixels, pixelIndex, groundDistance, ray, light, ground, sphere);
+            pixelColour = shadeGround(pixels, pixelIndex, groundDistance, ray, light, ground, sphere);
         }
         else
         {
-            shadeBackground(pixels, pixelIndex, rayDir, background);
+            pixelColour = shadeBackground(pixels, pixelIndex, rayDir, background);
         }
+
+        pixels[pixelIndex + 0] = (unsigned char)((fminf(fmaxf(pixelColour.x, 0.0f), 1.0f)) * 255.0f);
+        pixels[pixelIndex + 1] = (unsigned char)((fminf(fmaxf(pixelColour.y, 0.0f), 1.0f)) * 255.0f);
+        pixels[pixelIndex + 2] = (unsigned char)((fminf(fmaxf(pixelColour.z, 0.0f), 1.0f)) * 255.0f);
+        pixels[pixelIndex + 3] = 255;
     }
+    
+
 
     // these functions now help avoid mem being allocated everyframe
     // mem init at the start before launchraytracer loop is executed with main.cpp
