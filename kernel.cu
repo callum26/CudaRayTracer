@@ -76,15 +76,34 @@ struct Vec3
 // introducing material storing values of different objects
 struct Material {
     Vec3 colour;
-    float ka, kd, ks;
+    // ambient/diffuse/specular reflectivity
+    float ambientReflectivity, diffuseReflectivity, specularReflectivity;
+    //shiniess
+    float a; 
+};
 
+struct Light {
+    Vec3 pos;
+    // ia
+    Vec3 ambientIntensity;
+    // imd
+    Vec3 diffuseIntensity;
+    // ims
+    Vec3 specularIntensity;
+    // use to control overall intensity of light
+    float intensity;
+};
+
+struct Object {
+    Vec3 pos;
+    Material mat;
 };
 
 
-__device__ void writePixels(unsigned char *pixels, int pixelIndex, Vec3 colour, float phongShading){
-    pixels[pixelIndex + 0] = (unsigned char)((fminf(fmaxf(colour.x * phongShading, 0.0f), 1.0f)) * 255.0f);
-    pixels[pixelIndex + 1] = (unsigned char)((fminf(fmaxf(colour.y * phongShading, 0.0f), 1.0f)) * 255.0f);
-    pixels[pixelIndex + 2] = (unsigned char)((fminf(fmaxf(colour.z * phongShading, 0.0f), 1.0f)) * 255.0f);
+__device__ void writePixels(unsigned char *pixels, int pixelIndex, Object object, Vec3 phongShading){
+    pixels[pixelIndex + 0] = (unsigned char)((fminf(fmaxf(object.mat.colour.x * phongShading.x, 0.0f), 1.0f)) * 255.0f);
+    pixels[pixelIndex + 1] = (unsigned char)((fminf(fmaxf(object.mat.colour.y * phongShading.y, 0.0f), 1.0f)) * 255.0f);
+    pixels[pixelIndex + 2] = (unsigned char)((fminf(fmaxf(object.mat.colour.z * phongShading.z, 0.0f), 1.0f)) * 255.0f);
     pixels[pixelIndex + 3] = 255;
 }
 
@@ -97,7 +116,7 @@ __device__ void writePixels(unsigned char *pixels, int pixelIndex, Vec3 colour, 
 // then to shade that specific pixel based on point of intsect along with normal of surface at that point
 // also taking account the position of the light source in order to calculate the lighting components and therrefore colour of pixel
 
-__device__ bool raySphereIntersection(Vec3 camPos, Vec3 spherePos, float sphereRadius, Vec3 rayDir, float &sphereDistance)
+__device__ bool raySphereIntersection(Vec3 camPos, Object sphere, float sphereRadius, Vec3 rayDir, float &sphereDistance)
 {
 
     // implicit equation of a sphere with radius r centred at C = 0,0,0
@@ -119,7 +138,7 @@ __device__ bool raySphereIntersection(Vec3 camPos, Vec3 spherePos, float sphereR
     // O is the camPos
     // C is spherePos
     // camPos - spherepos gives us L aka the vectro from sphere center to orgin
-    Vec3 sphereToOrigin = camPos.sub(spherePos);
+    Vec3 sphereToOrigin = camPos.sub(sphere.pos);
 
     // equation now becomes (L + tD) . (L + tD) = r^2
     // = L . (L + tD) + tD . (L + tD)
@@ -228,15 +247,14 @@ __device__ bool rayPlaneIntersection(Vec3 camPos, Vec3 rayDir, float groundHeigh
     // a is a shinness factor for the material larger surfaces that are smoother
     // ia interensity of ambient lighting in the scene
 
-    // it also defines
-    // lights what are the set of all light soruces
-    // Lm is the direcitiopn vector from the point on the surface towards each light source m being to specificy the light source
-    // N is a normal at the point on the surface
-    // Rm is direction of a perfect reflected ray would take from the pooint on the surface
-    // V is the direction pointing towards the camera
+// it also defines
+// lights what are the set of all light soruces
+// Lm is the direcitiopn vector from the point on the surface towards each light source m being to specificy the light source
+// N is a normal at the point on the surface
+// Rm is direction of a perfect reflected ray would take from the pooint on the surface
+// V is the direction pointing towards the camera
 
     // each point is given by the following equation of surface point Ip
-
     // Ip = ka * ia + Sum (of all light soruces)(kd * (Lm . N)* im,d + ks * (Rm . V)^a * im,s))
     // (ka * ia) is for the ambient light
     // (kd * (Lm . N)* im,d) is for diffuse light
@@ -246,27 +264,17 @@ __device__ bool rayPlaneIntersection(Vec3 camPos, Vec3 rayDir, float groundHeigh
     // D = kd * (Lm . N)* im,d
     // S = ks * (Rm . V)^a * im,s
     // Ip = A + Sum (of all light soruces)(D + S)
-__device__ float calculateAmbient()
+__device__ Vec3 calculateAmbient(Light light, Object object)
 {
-    // ambient lighting is fixed for all points for now
-    // later one we can add more light sources but as there is one we can ignore it for now
-    // A = ka * ia
-    float ka = 0.35f;
-    float ia = 0.2f;
-    float ambientStrength = ka * ia;
-
-    // will require a loop later to add the diffuse and specular for all light sources we can ignore the sum
-    // reding our equation to
-    // Ip = A + D + S
-
+    Vec3 ambientStrength = light.ambientIntensity.scale(object.mat.ambientReflectivity);
     return ambientStrength;
 }
 
-__device__ Vec3 calcLightDir(Vec3 hitPoint, Vec3 lightPos){
+__device__ Vec3 calcLightDir(Vec3 hitPoint, Light light){
    
     // now we have the hit coords we can work out light distance and direction
     // lightToHit vector now contains distance and direction from hit point to light source
-    Vec3 lightToHit = lightPos.sub(hitPoint);
+    Vec3 lightToHit = light.pos.sub(hitPoint);
 
     // we normalise the lightToHit vector to only have direction vecotr
     Vec3 lightDirection = lightToHit.normalise();
@@ -274,10 +282,10 @@ __device__ Vec3 calcLightDir(Vec3 hitPoint, Vec3 lightPos){
     return lightDirection;
 }
 
-__device__ Vec3 calcSurfaceNormal(Vec3 hitPoint, Vec3 objectPos){
+__device__ Vec3 calcSurfaceNormal(Vec3 hitPoint, Object object){
     // to calculate N (surface normal) we calculate vector from center of sphere to hit point then normal it
     // again surfaceNormal currently is both direction and distance normalising will give us soley the direction
-    Vec3 objectToHit = hitPoint.sub(objectPos);
+    Vec3 objectToHit = hitPoint.sub(object.pos);
 
     // normalise it in order to get the surface normal
     Vec3 surfaceNormal = objectToHit.normalise();
@@ -286,15 +294,13 @@ __device__ Vec3 calcSurfaceNormal(Vec3 hitPoint, Vec3 objectPos){
 }
 
 
-__device__ float calculateDiffuse(Vec3 camPos, Vec3 rayDir, Vec3 lightPos, float distanceToObject, Vec3 objectPos)
-
+__device__ Vec3 calculateDiffuse(Vec3 camPos, Vec3 rayDir, Light light, float distanceToObject, Object object)
 {
     // D = kd * (Lm . N)* im,d
-    float kd = 0.65f;
     Vec3 hitPoint = camPos.add(rayDir.scale(distanceToObject));
 
-    Vec3 lightDir = calcLightDir(hitPoint, lightPos);
-    Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, objectPos);
+    Vec3 lightDir = calcLightDir(hitPoint, light);
+    Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, object);
     float lightDirDotSurfaceNormal = lightDir.dot(surfaceNormal);
 
     // (Lm. N) is calc in calclightDirDotSurfaceNormal
@@ -302,12 +308,11 @@ __device__ float calculateDiffuse(Vec3 camPos, Vec3 rayDir, Vec3 lightPos, float
     float diffuseFactor = fmaxf(lightDirDotSurfaceNormal, 0.0f);
 
     // im,d represents light scatter in all dirs when a light source hits suface this must be done for all light source
-    /* for now we only have one so we can ignore for now but later must add within the loop for all light sources*/
-    float imd = 1.0f; 
+    Vec3 imd = light.diffuseIntensity.scale(light.intensity);
 
     // we can now cal D
     // D = kd * (Lm . N) * im,d
-    float diffuseStrength = kd * diffuseFactor * imd;
+    Vec3 diffuseStrength = imd.scale(object.mat.diffuseReflectivity * diffuseFactor);
 
     return diffuseStrength;
 }
@@ -316,31 +321,30 @@ __device__ float calculateDiffuse(Vec3 camPos, Vec3 rayDir, Vec3 lightPos, float
 // the surface normal cannot be calculated the same way as for the sphere it was sillyto d it
 // this is temporary solution for now
 /* COULD INSTEAD PASS IN THE NORMAL IN FUNC TO SAVE SPACE*/
-__device__ float calculateGroundDiffuse(Vec3 camPos, Vec3 rayDir, Vec3 lightPos, float groundDistance)
+__device__ Vec3 calculateGroundDiffuse(Vec3 camPos, Vec3 rayDir, Light light, float groundDistance, Object object)
 {
-    float kd = 0.65f;
-
     Vec3 hitPoint = camPos.add(rayDir.scale(groundDistance));
 
-    Vec3 lightDirection = lightPos.sub(hitPoint).normalise();
+    Vec3 lightDirection = light.pos.sub(hitPoint).normalise();
 
     // no need to work out the ground normal as its the same everytime
     Vec3 groundNormal = {0.0f, 1.0f, 0.0f};
     float diffuseFactor = fmaxf(lightDirection.dot(groundNormal), 0.0f);
 
 
-    float imd = 1.0f;
-    // all thesmae baiscally
-    return kd * diffuseFactor * imd;
+    // im,d represents light scatter in all dirs when a light source hits suface this must be done for all light source
+    Vec3 imd = light.diffuseIntensity.scale(light.intensity);
+
+    // we can now cal D
+    // D = kd * (Lm . N) * im,d
+    Vec3 diffuseStrength = imd.scale(object.mat.diffuseReflectivity * diffuseFactor);
+
+    return diffuseStrength;
 }
 
-__device__ float calculateSpecular(Vec3 camPos, Vec3 rayDir, Vec3 lightPos, float distanceToObject, Vec3 objectPos)
+__device__ Vec3 calculateSpecular(Vec3 camPos, Vec3 rayDir, Light light, float distanceToObject, Object object)
 {
     // S = ks * (Rm . V)^a * im,s
-
-    // shiniess of the material
-    float ks = 0.2f;
-
     // Rm is the direction of the reflect ray from the point on the surface occuring from light source m
     // we can calc this by reflecting the light direction across the surface normal
     // incident vector reflection form is
@@ -352,8 +356,8 @@ __device__ float calculateSpecular(Vec3 camPos, Vec3 rayDir, Vec3 lightPos, floa
     // where the ray intersects the obj
     Vec3 hitPoint = camPos.add(rayDir.scale(distanceToObject));
 
-    Vec3 lightDir = calcLightDir(hitPoint, lightPos);
-    Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, objectPos);
+    Vec3 lightDir = calcLightDir(hitPoint, light);
+    Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, object);
 
     float lightDirDotSurfaceNormal = lightDir.dot(surfaceNormal);
 
@@ -370,18 +374,13 @@ __device__ float calculateSpecular(Vec3 camPos, Vec3 rayDir, Vec3 lightPos, floa
     float reflectDotcamToHit = reflectDir.dot(camToHitDirection);
     reflectDotcamToHit = fmaxf(reflectDotcamToHit, 0.0f); // again like diffuse we clamp to 0
 
-    // a is shinnes factor
-    float a = 24.0f;
-
     // im,s is intesity of light scatter in all directions when the light hits surface for specular reflection
-    // again we can ignore for now
-
-    float ims = 1.0f; 
+    Vec3 ims = light.specularIntensity.scale(light.intensity);
 
     // we can now cal S
     // S = ks * (Rm . V)^a * im,s`
 
-    float specularStrength = ks * powf(reflectDotcamToHit, a) * ims;
+    Vec3 specularStrength = ims.scale(object.mat.specularReflectivity * powf(reflectDotcamToHit, object.mat.a));
     return specularStrength;
 }
 
@@ -392,38 +391,31 @@ __device__ float calculateSpecular(Vec3 camPos, Vec3 rayDir, Vec3 lightPos, floa
 // diffusal simulates light scattering when striking a surface, a matte appearance depending on angle of light source and surface normal surfaces facing light appear bright than ones not facing
 // specular uses bright highlights occuring when light reflects off smoth ir rough surface. a lot more dynamic than thte others
 // for now only ambient and diffual are used specular is more cmoplex and will be done later
-__device__ void shadeSphere(unsigned char *pixels, int pixelIndex, float sphereDistance, Vec3 rayDir, Vec3 camPos, Vec3 lightPos, Vec3 spherePos, Vec3 sphereRGB)
+__device__ void shadeSphere(unsigned char *pixels, int pixelIndex, float sphereDistance, Vec3 rayDir, Vec3 camPos, Light light, Object sphere)
 {
-    float ambientStrength = calculateAmbient();
-    float diffuseStrength = calculateDiffuse(camPos, rayDir, lightPos, sphereDistance, spherePos);
-    float specularStrength = calculateSpecular(camPos, rayDir, lightPos, sphereDistance, spherePos);
+    Vec3 ambientStrength = calculateAmbient(light, sphere);
+    Vec3 diffuseStrength = calculateDiffuse(camPos, rayDir, light, sphereDistance, sphere);
+    Vec3 specularStrength = calculateSpecular(camPos, rayDir, light, sphereDistance, sphere);
 
     // Ip = A + D + S
-    float phongShading = ambientStrength + diffuseStrength + specularStrength;
-    phongShading = fminf(phongShading, 1.0f);
+    Vec3 phongShading = {
+        fminf((ambientStrength.x + diffuseStrength.x + specularStrength.x), 1.0f),
+        fminf((ambientStrength.y + diffuseStrength.y + specularStrength.y), 1.0f),
+        fminf((ambientStrength.z + diffuseStrength.z + specularStrength.z), 1.0f)
+    };
 
-    writePixels(pixels, pixelIndex, sphereRGB, phongShading);
+    writePixels(pixels, pixelIndex, sphere, phongShading);
 }
-
-
 
 
 
 
 // shading of the ground is similar to sphere
 // we dont really need specular for the ground as its a matte surface
-__device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundDistance, Vec3 rayDir, Vec3 camPos, Vec3 lightPos, Vec3 groundRGB, Vec3 groundPos)
+__device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundDistance, Vec3 rayDir, Vec3 camPos, Light light, Object ground)
 {
-    float ambientStrength = calculateAmbient();
 
-    float diffuseStrength = calculateGroundDiffuse(camPos, rayDir, lightPos, groundDistance);
-
-    // as we ignore specular
-    // the equation simplifies to
-    // Ip = A + D
-    float phongShading = ambientStrength + diffuseStrength;
-    phongShading = fminf(phongShading, 1.0f);
-
+      
     // implentning checkboard pattern to show off ground more clearly
 
     float tileSize = 1.0f;
@@ -443,36 +435,48 @@ __device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundD
     int checkZ = floor((hitPoint.z + checkerOffsetZ) / tileSize);
 
     // if both are even or both are odd we make one colour otherwise we make the other colour
-
+    
     if ((checkX % 2 == 0 && checkZ % 2 == 0) || (checkX % 2 != 0 && checkZ % 2 != 0))
     {
         // just liek sphjerw shade xyz repsect rgb
-        groundRGB.x *= 0.5f;
-        groundRGB.y *= 0.5f;
-        groundRGB.z *= 0.5f;
+        ground.mat.colour = {0.3f, 0.3f, 0.3f};
     }
     else
     {
-        // odd tile colour
-        groundRGB.x *= 1.0f;
-        groundRGB.y *= 1.0f;
-        groundRGB.z *= 1.0f;
+        ground.mat.colour = {0.7f, 0.7f, 0.7f};
     }
 
-    writePixels(pixels, pixelIndex, groundRGB, phongShading);
+    Vec3 ambientStrength = calculateAmbient(light, ground);
+    Vec3 diffuseStrength = calculateGroundDiffuse(camPos, rayDir, light, groundDistance, ground);
+
+    // as we ignore specular
+    // the equation simplifies to
+    // Ip = A + D
+    Vec3 phongShading = {
+        fminf((ambientStrength.x + diffuseStrength.x), 1.0f),
+        fminf((ambientStrength.y + diffuseStrength.y), 1.0f),
+        fminf((ambientStrength.z + diffuseStrength.z), 1.0f)
+    };
+  
+
+    writePixels(pixels, pixelIndex, ground, phongShading);
 
 }
 
 // for the background gradient based on the ray direction
 
-__device__ void shadeBackground(unsigned char *pixels, int pixelIndex, Vec3 rayDir, Vec3 backgroundRGB)
+__device__ void shadeBackground(unsigned char *pixels, int pixelIndex, Vec3 rayDir, Object background)
 {
     // we can use the y of the ray direction to determine how much of the background colour to show
     // this works bcos y is btween -1 and 1 when normalised
     // rayDirY -1 its pointing down towards the ground its 1 pointing up towards the sky
-    float backgroundDiffuse = 0.5f * (rayDir.y + 1);
+    Vec3 backgroundDiffuse = {
+        0.5f * (rayDir.x + 1),
+        0.5f * (rayDir.y + 1),
+        0.5f * (rayDir.z + 1),
+    };
 
-    writePixels(pixels, pixelIndex, backgroundRGB, backgroundDiffuse);
+    writePixels(pixels, pixelIndex, background, backgroundDiffuse);
 }
 
 __global__ void renderKernel(unsigned char *pixels, int screenWidth, int screenHeight)
@@ -487,30 +491,68 @@ __global__ void renderKernel(unsigned char *pixels, int screenWidth, int screenH
         return;
 
     Vec3 camPos = {0.0f, 0.0f, 0.0f};
-    Vec3 lightPos = {3.0f, 3.0f, 2.0f};
-    Vec3 spherePos = {0.0f, 0.0f, -3.0f};
-    Vec3 sphereRGB = {0.2f, 0.5f, 1.0f};
-    Vec3 groundRGB = {0.6f, 0.6f, 0.6f};
-    Vec3 backgroundRGB = {0.1f, 0.1f, 0.1f};
-    Vec3 groundPos = {0.0f, -2.0f, 0.0f};
 
+    Vec3 backgroundRGB = {0.1f, 0.1f, 0.1f};
+
+    Light light = {
+        {3.0f, 3.0f, 3.0f}, // pos
+        {0.25f, 0.25f, 0.25f}, // ambientIntensity 
+        {0.8f, 0.8f, 0.8f}, // diffuseIntensity 
+        {0.6f, 0.6f, 0.6f}, // specularIntensity 
+        1.0f // intensity
+    };
+
+    Object sphere = {
+        {0.0f, 0.0f, -3.0f}, // pos
+        {
+        {0.2f, 0.5f, 1.0f}, // colour
+        0.2f, // ambientReflectivity
+        0.7f, // diffuseReflectivity
+        0.5f, // specularReflectivity
+        24.0f // shininess 
+        }
+    };
+
+    Object ground = {
+        {0.0f, -2.0f, 0.0f}, // pos
+        {
+        {0.2f, 0.2f, 0.2f}, // colour
+        0.2f, // ambientReflectivity
+        0.6f, // diffuseReflectivity
+        0.5f, // specularReflectivity
+        24.0f // shininess
+        }
+    };
+
+    Object background = {
+        {0.0f, 0.0f, 0.0f}, // pos // irrelasvant
+        {
+        {0.6f, 0.6f, 0.6f}, // colour
+        0.2f, // ambientReflectivity
+        0.7f, // diffuseReflectivity
+        0.5f, // specularReflectivity
+        24.0f // shininess 
+        }
+    };
+    
     float sphereRadius = 1.5f;
     float groundNormalY = 1.0f;
 
+    // map pixel coords between -0.5/0.5 for x and 0.5/-0.5 Y 
     float normalX = ((float)pixelX / (screenWidth - 1)) - 0.5f;
     float normalY = 0.5f - ((float)pixelY / (screenHeight - 1));
 
+    // these are then scaled by view port to get correct aspect ratio
     Vec3 rayDir = {normalX * viewPortWidth, normalY * viewPortHeight, -1.0f};
 
     // normalise the ray direction
-    // ;ater make this a unc
-    Vec3 rayDirLen = rayDir.normalise();
+    rayDir = rayDir.normalise();
 
     float sphereDistance = INFINITY;
-    bool hitSphere = raySphereIntersection(camPos, spherePos, sphereRadius, rayDir, sphereDistance);
+    bool hitSphere = raySphereIntersection(camPos, sphere, sphereRadius, rayDir, sphereDistance);
 
     float groundDistance = INFINITY;
-    bool hitGround = rayPlaneIntersection(camPos, rayDir, groundPos.y, groundDistance);
+    bool hitGround = rayPlaneIntersection(camPos, rayDir, ground.pos.y, groundDistance);
 
     int writeRow = (screenHeight - 1 - pixelY);
     int pixelIndex = (writeRow * screenWidth + pixelX) * 4;
@@ -520,15 +562,15 @@ __global__ void renderKernel(unsigned char *pixels, int screenWidth, int screenH
     if (hitSphere && (!hitGround || sphereDistance < groundDistance))
     {
 
-        shadeSphere(pixels, pixelIndex, sphereDistance, rayDir, camPos, lightPos, spherePos, sphereRGB);
+        shadeSphere(pixels, pixelIndex, sphereDistance, rayDir, camPos, light, sphere);
     }
     else if (hitGround)
     {
-        shadeGround(pixels, pixelIndex, groundDistance, rayDir, camPos, lightPos, groundRGB, groundPos);
+        shadeGround(pixels, pixelIndex, groundDistance, rayDir, camPos, light, ground);
     }
     else
     {
-        shadeBackground(pixels, pixelIndex, rayDir, backgroundRGB);
+        shadeBackground(pixels, pixelIndex, rayDir, background);
     }
 }
 
