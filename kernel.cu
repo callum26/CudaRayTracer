@@ -385,25 +385,33 @@ __device__ Vec3 calculateSpecular(Vec3 camPos, Vec3 rayDir, Light light, float d
     return specularStrength;
 }
 
-__device__ bool isInShadow(Vec3 camPos, Vec3 rayDir, float distanceToObject, Light light, Object object)
+__device__ bool isInShadow(Vec3 hitPoint, Vec3 surfaceNormal, Light light, Object sphere, Object ground)
 {
-    Vec3 hitPoint = camPos.add(rayDir.scale(distanceToObject));
+    // passing in hitpoint surfacenormal easier
     Vec3 lightDir = calcLightDir(hitPoint, light);
-    Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, object);
+    
+    // origin of the shadow is technically just hitpoint as thats where the light strikes the surface
+    // it is common practise to adjust the origin just sligthly to prevent artifcats
     Vec3 shadowOrigin = hitPoint.add(surfaceNormal.scale(0.001f));
-    float shadowToLight = light.pos.sub(shadowOrigin).magnitude();
+
+    // distance from the shadow ray to the light source
+    float shadowDistanceToLight = (light.pos.sub(shadowOrigin)).magnitude();
 
     float shadowSphereDistance;
-    if (raySphereIntersection(shadowOrigin, object, lightDir, shadowSphereDistance))
+    // reruns both intersection maths with shadow orgin instead and also initing a new shadowDistance var
+    // which will be return and compared to shadowDistanceToLight
+    // if shadowDistanceToLight greater than the intersection distance (shadowSphereDistance)
+    // then it must mean its in shaded area
+    if (raySphereIntersection(shadowOrigin, sphere, lightDir, shadowSphereDistance))
     {
-        if (shadowSphereDistance < shadowToLight)
+        if (shadowSphereDistance < shadowDistanceToLight)
             return true;
     }
 
     float shadowGroundDistance;
-    if (rayPlaneIntersection(shadowOrigin, lightDir, object.pos.y, shadowGroundDistance))
+    if (rayPlaneIntersection(shadowOrigin, lightDir, ground.pos.y, shadowGroundDistance))
     {
-        if (shadowGroundDistance < shadowToLight)
+        if (shadowGroundDistance < shadowDistanceToLight)
             return true;
     }
 
@@ -417,12 +425,12 @@ __device__ bool isInShadow(Vec3 camPos, Vec3 rayDir, float distanceToObject, Lig
 // diffusal simulates light scattering when striking a surface, a matte appearance depending on angle of light source and surface normal surfaces facing light appear bright than ones not facing
 // specular uses bright highlights occuring when light reflects off smoth ir rough surface. a lot more dynamic than thte others
 // for now only ambient and diffual are used specular is more cmoplex and will be done later
-__device__ void shadeSphere(unsigned char *pixels, int pixelIndex, float sphereDistance, Vec3 rayDir, Vec3 camPos, Light light, Object sphere)
+__device__ void shadeSphere(unsigned char *pixels, int pixelIndex, float sphereDistance, Vec3 rayDir, Vec3 camPos, Light light, Object sphere, Object ground)
 {
     Vec3 hitPoint = camPos.add(rayDir.scale(sphereDistance));
     Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, sphere);
 
-    if (isInShadow(camPos, rayDir, sphereDistance, light, sphere))
+    if (isInShadow(hitPoint, surfaceNormal, light, sphere, ground))
     {
         // if its in the shadow only use ambient`
         Vec3 ambientStrength = calculateAmbient(light, sphere);
@@ -446,7 +454,7 @@ __device__ void shadeSphere(unsigned char *pixels, int pixelIndex, float sphereD
 
 // shading of the ground is similar to sphere
 // we dont really need specular for the ground as its a matte surface
-__device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundDistance, Vec3 rayDir, Vec3 camPos, Light light, Object ground)
+__device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundDistance, Vec3 rayDir, Vec3 camPos, Light light, Object ground, Object sphere)
 {
 
     // implentning checkboard pattern to show off ground more clearly
@@ -479,18 +487,29 @@ __device__ void shadeGround(unsigned char *pixels, int pixelIndex, float groundD
         ground.mat.colour = {0.7f, 0.7f, 0.7f};
     }
 
-    Vec3 ambientStrength = calculateAmbient(light, ground);
-    Vec3 diffuseStrength = calculateGroundDiffuse(camPos, rayDir, light, groundDistance, ground);
+    
+    Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, ground);
 
-    // as we ignore specular
-    // the equation simplifies to
-    // Ip = A + D
-    Vec3 phongShading = {
-        fminf((ambientStrength.x + diffuseStrength.x), 1.0f),
-        fminf((ambientStrength.y + diffuseStrength.y), 1.0f),
-        fminf((ambientStrength.z + diffuseStrength.z), 1.0f)};
+    if (isInShadow(hitPoint, surfaceNormal, light, sphere, ground))
+    {
+        // if its in the shadow only use ambient`
+        Vec3 ambientStrength = calculateAmbient(light, ground);
+        writePixels(pixels, pixelIndex, ground, ambientStrength);
+    }
+    else
+    {
+        Vec3 ambientStrength = calculateAmbient(light, ground);
+        Vec3 diffuseStrength = calculateGroundDiffuse(camPos, rayDir, light, groundDistance, ground);
 
-    writePixels(pixels, pixelIndex, ground, phongShading);
+        // Ip = A + D + S
+        Vec3 phongShading = {
+            fminf((ambientStrength.x + diffuseStrength.x), 1.0f),
+            fminf((ambientStrength.y + diffuseStrength.y), 1.0f),
+            fminf((ambientStrength.z + diffuseStrength.z), 1.0f)
+        };
+
+        writePixels(pixels, pixelIndex, ground, phongShading);
+    }
 }
 
 // for the background gradient based on the ray direction
@@ -591,11 +610,11 @@ __global__ void renderKernel(unsigned char *pixels, int screenWidth, int screenH
     if (hitSphere && (!hitGround || sphereDistance < groundDistance))
     {
 
-        shadeSphere(pixels, pixelIndex, sphereDistance, rayDir, camPos, light, sphere);
+        shadeSphere(pixels, pixelIndex, sphereDistance, rayDir, camPos, light, sphere, ground);
     }
     else if (hitGround)
     {
-        shadeGround(pixels, pixelIndex, groundDistance, rayDir, camPos, light, ground);
+        shadeGround(pixels, pixelIndex, groundDistance, rayDir, camPos, light, ground, sphere);
     }
     else
     {
