@@ -160,10 +160,10 @@ int main()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
     // move the calculation of host pixel buffer solely with cpp
-
     unsigned char *hostPixels = new unsigned char[screenWidth * screenHeight * 4];
     initDevicePixel(screenWidth, screenHeight);
-    
+    // moved scene init to host 
+    initScene();
     float statsTimer = 0.0f; 
 
     while (!glfwWindowShouldClose(win))

@@ -2,13 +2,11 @@
     #include <cmath>
     #include "raytracer.h"
 
-
-
     const unsigned int screenWidth = 800;
     const unsigned int screenHeight = 800;
 
     // device pixels declared frist point to empty memory addressi in gpu
-    static unsigned char *devicePixels = nullptr;
+    static uchar4 *devicePixels = nullptr;
 
     // now we have all of the basis of the ray tracer working
     // introducing structs to simplify the length of code
@@ -125,7 +123,7 @@
     };
 
     __constant__ Light light;
-    __constant__ Object sphere;
+    __constant__ Object spheres[2];
     __constant__ Object ground;
     __constant__ Object background;
 
@@ -230,7 +228,7 @@
             // for now farIntersection isnt actually used but it could be if cam movement was added
 
             // as long as the intersection is infront of the camera then set the distance of this specific ray to the distance of the clostinerscection
-            if (closeIntersection > 0.0f)
+            if (closeIntersection > 0.001f)
             {
                 distance = closeIntersection;
                 return true;
@@ -249,7 +247,7 @@
         // the distrance from the ground to the camera divided by the y of the ray direction
         float intersectionDistance = (object.pos.y - ray.origin.y) / ray.rayDir.y;
         // make sure the intersection distance is pos we shouldnt worry about intersections behind the camera
-        if (intersectionDistance > 0.0f)
+        if (intersectionDistance > 0.001f)
         {
             // then we can set the ground distance to the intersection distance
             distance = intersectionDistance;
@@ -315,7 +313,12 @@
         // normalise it in order to get the surface normal
         Vec3 surfaceNormal = objectToHit.normalise();
 
-        return surfaceNormal;
+        // pass in const of groundobject
+        if (object.type == groundObject){
+            return ground.normal;
+        } else if (object.type == sphereObject){
+            return surfaceNormal;
+        }
     }
 
     __device__ Vec3 calculateDiffuse(Ray ray, Light light, float distanceToObject, Object object)
@@ -325,35 +328,12 @@
 
         Vec3 lightDir = calcLightDir(hitPoint, light);
         Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, object);
+
         float lightDirDotSurfaceNormal = lightDir.dot(surfaceNormal);
 
         // (Lm. N) is calc in calclightDirDotSurfaceNormal
         // clamp any negative values are 0 bcos they woukd facing qwaay from light hence no lit
         float diffuseFactor = fmaxf(lightDirDotSurfaceNormal, 0.0f);
-
-        // im,d represents light scatter in all dirs when a light source hits suface this must be done for all light source
-        Vec3 imd = light.diffuseIntensity.scale(light.intensity);
-
-        // we can now cal D
-        // D = kd * (Lm . N) * im,d
-        Vec3 diffuseStrength = imd.scale(object.mat.diffuseReflectivity * diffuseFactor);
-
-        return diffuseStrength;
-    }
-
-    // was cuasingh issues using both the same equations for calculating the diffuse
-    // the surface normal cannot be calculated the same way as for the sphere it was sillyto d it
-    // this is temporary solution for now
-    /* COULD INSTEAD PASS IN THE NORMAL IN FUNC TO SAVE SPACE*/
-    __device__ Vec3 calculateGroundDiffuse(Ray ray, Light light, float groundDistance, Object object)
-    {
-        Vec3 hitPoint = ray.origin.add(ray.rayDir.scale(groundDistance));
-
-        Vec3 lightDirection = light.pos.sub(hitPoint).normalise();
-
-        // no need to work out the ground normal as its the same everytime
-        Vec3 groundNormal = {0.0f, 1.0f, 0.0f};
-        float diffuseFactor = fmaxf(lightDirection.dot(groundNormal), 0.0f);
 
         // im,d represents light scatter in all dirs when a light source hits suface this must be done for all light source
         Vec3 imd = light.diffuseIntensity.scale(light.intensity);
@@ -407,7 +387,7 @@
         return specularStrength;
     }
 
-    __device__ bool isInShadow(Vec3 hitPoint, Vec3 surfaceNormal, Light light, Object sphere, Object ground)
+    __device__ bool isInShadow(Vec3 hitPoint, Vec3 surfaceNormal, Light light)
     {
         // passing in hitpoint surfacenormal easier
         Vec3 lightDir = calcLightDir(hitPoint, light);
@@ -428,10 +408,16 @@
         // init shadow ray
         Ray shadowRay = {shadowOrigin, lightDir, 0.0f};
 
-        if (rayIntersect(shadowRay, sphere, shadowSphereDistance))
+        // loop through all speheres 
+        // change this to introduce spherenum for scability
+        for (int i = 0; i < 2; i++){
+
+        float shadowSphereDistance;
+        if (rayIntersect(shadowRay, spheres[i], shadowSphereDistance))
         {
             if (shadowSphereDistance < shadowDistanceToLight)
                 return true;
+        }
         }
 
         float shadowGroundDistance;
@@ -451,12 +437,12 @@
     // diffusal simulates light scattering when striking a surface, a matte appearance depending on angle of light source and surface normal surfaces facing light appear bright than ones not facing
     // specular uses bright highlights occuring when light reflects off smoth ir rough surface. a lot more dynamic than thte others
     // for now only ambient and diffual are used specular is more cmoplex and will be done later
-    __device__ Vec3 shadeSphere(unsigned char *pixels, int pixelIndex, float sphereDistance, Ray ray, Light light, Object sphere, Object ground)
+    __device__ Vec3 shadeSphere(float sphereDistance, Ray ray, Light light, Object sphere)
     {
         Vec3 hitPoint = ray.origin.add(ray.rayDir.scale(sphereDistance));
         Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, sphere);
 
-        if (isInShadow(hitPoint, surfaceNormal, light, sphere, ground))
+        if (isInShadow(hitPoint, surfaceNormal, light))
         {
             // if its in the shadow only use ambient
             return calculateAmbient(light, sphere).multi(sphere.mat.colour);
@@ -479,7 +465,7 @@
 
     // shading of the ground is similar to sphere
     // we dont really need specular for the ground as its a matte surface
-    __device__ Vec3 shadeGround(unsigned char *pixels, int pixelIndex, float groundDistance, Ray ray, Light light, Object ground, Object sphere)
+    __device__ Vec3 shadeGround(float groundDistance, Ray ray, Light light, Object ground)
     {
         // implentning checkboard pattern to show off ground more clearly
 
@@ -514,7 +500,7 @@
         
         Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, ground);
 
-        if (isInShadow(hitPoint, surfaceNormal, light, sphere, ground))
+        if (isInShadow(hitPoint, surfaceNormal, light))
         {
             // if its in the shadow only use ambient`
             return calculateAmbient(light, ground).multi(ground.mat.colour);
@@ -522,7 +508,7 @@
         else
         {
             Vec3 ambientStrength = calculateAmbient(light, ground);
-            Vec3 diffuseStrength = calculateGroundDiffuse(ray, light, groundDistance, ground);
+            Vec3 diffuseStrength = calculateDiffuse(ray, light, groundDistance, ground);
 
             // Ip = A + D + S
             Vec3 phongShading = {
@@ -537,21 +523,27 @@
 
     // for the background gradient based on the ray direction
 
-    __device__ Vec3 shadeBackground(unsigned char *pixels, int pixelIndex, Vec3 rayDir, Object background)
+    __device__ Vec3 shadeBackground(Ray ray, Object background)
     {
         // we can use the y of the ray direction to determine how much of the background colour to show
         // this works bcos y is btween -1 and 1 when normalised
         // rayDirY -1 its pointing down towards the ground its 1 pointing up towards the sky
-        Vec3 backgroundDiffuse = {
-            0.5f * (rayDir.x + 1),
-            0.5f * (rayDir.y + 1),
-            0.5f * (rayDir.z + 1),
+        float position = 0.5f * (ray.rayDir.y + 1.0f);
+
+        // gonna do blue white gradient
+        Vec3 white = {1.0f, 1.0f, 1.0f};
+        Vec3 blue = {0.1f, 0.1f, 1.0f};
+        
+        Vec3 gradient = {
+            (1.0f - position) * white.x + position * blue.x,
+            (1.0f - position) * white.y + position * blue.y,
+            (1.0f - position) * white.z + position * blue.z
         };
 
-        return backgroundDiffuse.multi(background.mat.colour);
+        return gradient.multi(background.mat.colour);
     }
 
-    __global__ void renderKernel(unsigned char *pixels, int screenWidth, int screenHeight)
+    __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
     {
         int pixelX = blockIdx.x * blockDim.x + threadIdx.x;
         int pixelY = blockIdx.y * blockDim.y + threadIdx.y;
@@ -582,37 +574,88 @@
 
         };
 
+        int writeRow = (screenHeight - 1 - pixelY);
+        int pixelIndex = (writeRow * screenWidth + pixelX);
+
+        // adding reflection rays
+        // every time ray bounces its strength is reduced
+        Vec3 pixelColour = {0.0f, 0.0f, 0.0f};
+        Vec3 strengthOfRay = {1.0f, 1.0f, 1.0f};
+        int maxBounce = 3;
+
+        for (int i = 0; i < maxBounce; i++){
+
         float sphereDistance = INFINITY;
-        bool hitSphere = rayIntersect(ray, sphere, sphereDistance);
+        int hitIndex = -1;
+
+        for (int s = 0; s < 2; s++){
+            float closestSphereDistance = INFINITY;
+            if (rayIntersect(ray, spheres[s], closestSphereDistance)){
+                if (closestSphereDistance < sphereDistance){
+                    sphereDistance = closestSphereDistance;
+                    hitIndex = s;
+                }
+            }
+        }
+        bool hitSphere = (hitIndex != -1);
 
         float groundDistance = INFINITY;
         bool hitGround = rayIntersect(ray, ground, groundDistance);
-
-        int writeRow = (screenHeight - 1 - pixelY);
-        int pixelIndex = (writeRow * screenWidth + pixelX) * 4;
-
-        Vec3 pixelColour = {0.0f, 0.0f, 0.0f};
 
         // hitSphere and hitGround are bools for determining whether a specifced ray hit the objects
         // they both also update their value for their respective distances whenever they run and return true
         if (hitSphere && (!hitGround || sphereDistance < groundDistance))
         {
+            Object hitObject = spheres[hitIndex];
+            // okay now we have to update each var depending on the results of the ray 
+            // then we can calc the actual final value
+            Vec3 hitColour = shadeSphere(sphereDistance, ray, light, hitObject);
+            // as its recalling multiple add next hit colour to previous multiplied by the current strenght
+            pixelColour = pixelColour.add(hitColour.multi(strengthOfRay));
 
-            pixelColour = shadeSphere(pixels, pixelIndex, sphereDistance, ray, light, sphere, ground);
+            strengthOfRay = strengthOfRay.scale(hitObject.mat.specularReflectivity);
+            
+            // update hitpoin surface normal ray dir making sure it runs shadeSphere with its new values
+            Vec3 hitPoint = ray.origin.add(ray.rayDir.scale(sphereDistance));
+            Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, hitObject);
+
+            // do same as shadow ray making sure its not actually in the same point as it can cause artifcats
+            ray.origin = hitPoint.add(surfaceNormal.scale(0.001f));
+            // then find the reflected ray 
+            // different from the R = 2 * (N . L) * N - L
+            // as we are dealing with ray point from camera to hitpoint
+            // rather than the og where it from from the hitpoint to the light we use
+            // R = I - 2 * (I . N) * N
+            // I incident vector
+            // N = surfacenormal
+            // R = I - (N * (I. N) * 2)
+            ray.rayDir = ray.rayDir.sub(surfaceNormal.scale((ray.rayDir.dot(surfaceNormal)) * 2.0f)).normalise();
+
+
         }
         else if (hitGround)
         {
-            pixelColour = shadeGround(pixels, pixelIndex, groundDistance, ray, light, ground, sphere);
+            // with ground and background not reflective currently so break out loop 
+            Vec3 hitColour = shadeGround(groundDistance, ray, light, ground);
+            pixelColour = pixelColour.add(hitColour.multi(strengthOfRay));
+            break; 
         }
         else
         {
-            pixelColour = shadeBackground(pixels, pixelIndex, rayDir, background);
+            Vec3 hitColour = shadeBackground(ray, background);
+            pixelColour = pixelColour.add(hitColour.multi(strengthOfRay));
+            break; 
         }
+    }
 
-        pixels[pixelIndex + 0] = (unsigned char)((fminf(fmaxf(pixelColour.x, 0.0f), 1.0f)) * 255.0f);
-        pixels[pixelIndex + 1] = (unsigned char)((fminf(fmaxf(pixelColour.y, 0.0f), 1.0f)) * 255.0f);
-        pixels[pixelIndex + 2] = (unsigned char)((fminf(fmaxf(pixelColour.z, 0.0f), 1.0f)) * 255.0f);
-        pixels[pixelIndex + 3] = 255;
+        // change storing of pixel buffer to use the cuda uchar4
+        // storing rgba values 
+
+        unsigned char r = (unsigned char)((fminf(fmaxf(pixelColour.x, 0.0f), 1.0f)) * 255.0f);
+        unsigned char g = (unsigned char)((fminf(fmaxf(pixelColour.y, 0.0f), 1.0f)) * 255.0f);
+        unsigned char b = (unsigned char)((fminf(fmaxf(pixelColour.z, 0.0f), 1.0f)) * 255.0f);
+    
+        pixels[pixelIndex] = make_uchar4(r, g, b, 255);
     }
     
 
@@ -623,7 +666,8 @@
     void initDevicePixel(int screenWidth, int screenHeight)
     {
         // cuda malloc takes address of devicepixels storing the size needed as W * H * 4 as RGBA of each pixel
-        cudaMalloc(&devicePixels, screenWidth * screenHeight * 4);
+        // 4 removed as changed to uchar4 storage need size of it tho
+        cudaMalloc(&devicePixels, screenWidth * screenHeight * sizeof(uchar4));
     }
 
     void freeDevicePixels()
@@ -632,8 +676,8 @@
         cudaFree(devicePixels);
     }
 
-    float launchRayTracer(unsigned char *hostPixels, int screenWidth, int screenHeight)
-    {
+    // added init scene to prevent reloading the scene
+    void initScene(){
         Vec3 camPos = {0.0f, 0.0f, 0.0f};
 
         Light Hlight = {
@@ -644,26 +688,38 @@
             1.0f                   // intensity
         };
 
-        Object Hsphere;
-        Hsphere.pos = {0.0f, 0.0f, -3.0f};
-        Hsphere.mat = {
-        {0.2f, 0.5f, 1.0f}, // colour
-        0.2f, // ambientReflectivity
-        0.7f, // diffuseReflectivity
-        0.5f, // specularReflectivity
-        24.0f // shininess
+        Object Hspheres[2];        
+        
+        Hspheres[0].pos = {-1.5f, -0.5f, -4.0f};
+        Hspheres[0].mat = {
+            {1.0f, 1.0f, 1.0f},
+            0.1f, // ambient
+            0.1f, // diffuse 
+            0.9f, // specular 
+            64.0f // shininess
         }; 
-        Hsphere.type = sphereObject;
-        Hsphere.radius = 1.5f;
-            
+        Hspheres[0].type = sphereObject;
+        Hspheres[0].radius = 1.0f; 
+        
+        Hspheres[1].pos = {1.5f, -0.5f, -4.0f}; 
+        Hspheres[1].mat = {
+            {1.0f, 0.2f, 0.2f}, 
+            0.2f, // ambient
+            0.7f, // diffuse
+            0.3f, // specular 
+            32.0f // shininess
+        }; 
+        Hspheres[1].type = sphereObject;
+        Hspheres[1].radius = 1.0f;
+        
 
         Object Hground;
         Hground.pos = {0.0f, -2.0f, 0.0f}; 
         Hground.mat = {
-        {0.2f, 0.2f, 0.2f}, // colour
+        {0.7f, 0.7f, 0.7f}, // colour
         0.2f, // ambientReflectivity
         0.6f, // diffuseReflectivity
-        0.5f, // specularReflectivity
+        0.1f, // specularReflectivity
         24.0f // shininess
         };
         Hground.type = groundObject;
@@ -671,7 +727,7 @@
 
         Object Hbackground;
         Hbackground.mat = {
-        {0.6f, 0.6f, 0.6f}, // colour
+        {1.0f, 1.0f, 1.0f}, // colour
         0.2f, // ambientReflectivity
         0.7f, // diffuseReflectivity
         0.5f, // specularReflectivity
@@ -679,9 +735,14 @@
         };
 
         cudaMemcpyToSymbol(light, &Hlight, sizeof(Light));
-        cudaMemcpyToSymbol(sphere, &Hsphere, sizeof(Object));
+        cudaMemcpyToSymbol(spheres, &Hspheres, sizeof(Object) * 2);
         cudaMemcpyToSymbol(ground, &Hground, sizeof(Object));
         cudaMemcpyToSymbol(background, &Hbackground, sizeof(Object));
+
+    }
+
+    float launchRayTracer(void* hostPixels, int screenWidth, int screenHeight)
+    {
 
         // going to start implementation of performance stats
         // https://developer.nvidia.com/blog/how-implement-performance-metrics-cuda-cc/
