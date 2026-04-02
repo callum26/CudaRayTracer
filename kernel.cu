@@ -8,9 +8,10 @@ const unsigned int screenHeight = 800;
 // device pixels declared frist point to empty memory additionressi in gpu
 static uchar4 *devicePixels = nullptr;
 
-// stores a 3D vector with coords xyz 
+// stores a 3D vector with coords xyz
 // vital part of the whole program
-struct Vec3{
+struct Vec3
+{
     float x, y, z;
 
     // calculations for commonly needed vector maths
@@ -66,33 +67,38 @@ struct Vec3{
     __device__ Vec3 normalise() const
     {
         float mag = magnitude();
-        if (mag != 0){
-        return {x / mag, y / mag, z / mag};
+        if (mag != 0)
+        {
+            return {x / mag, y / mag, z / mag};
         }
         return {0.0f, 0.0f, 0.0f};
     }
 };
 
+// stores lighting properties of material
 struct Material
 {
     Vec3 colour;
-    // ambient/diffuse/specular reflectivity
+    // ka, kd, ks
     float ambientReflectivity, diffuseReflectivity, specularReflectivity;
-    // shiniess
-    float a;
+    // a
+    float shininess;
 };
 
 struct Light
 {
     Vec3 position;
     // ia, imd, ims
-    Vec3 ambientIntensity; Vec3 diffuseIntensity; Vec3 specularIntensity;
+    Vec3 ambientIntensity;
+    Vec3 diffuseIntensity;
+    Vec3 specularIntensity;
     float lightIntensity;
 };
 
 // read about online find the source i think it was a yt video
 // seperating objects into types
-enum ObjectType{
+enum ObjectType
+{
     sphereObject,
     groundObject,
 };
@@ -104,24 +110,23 @@ struct Object
     Material material;
     ObjectType type;
 
-    float radius; 
-    Vec3 normal; 
-    
+    float radius;
+    Vec3 normal;
 };
 
-struct Ray{
+struct Ray
+{
     Vec3 origin;
     Vec3 direction;
     Vec3 hitPoint;
 };
 
-// consts for gpu prevents recopying 
+// consts for gpu prevents recopying
 /* MAYBE BETTER WAY TO DO THIS?*/
 __constant__ Light light;
 __constant__ Object spheres[2];
 __constant__ Object ground;
 __constant__ Object background;
-
 
 // from my reading on https://www.scratchapixel.com/lessons/3d-basic-rendering/minimal-ray-tracer-rendering-simple-shapes/ray-sphere-intersection
 // ray defoed as ray(t) = Origin + t * Direction
@@ -130,130 +135,127 @@ __constant__ Object background;
 // t = distance from point of intersection to origin of the ray
 // find value of t (if intersects) use it to find the point of intersect with spehere
 /* MIGHT SPLIT THIS BACK UP INTO TWO EQUATIONS USING IFS IS INEFFICIENT*/
-__device__ bool rayIntersect(Ray ray, Object object, float &distance){
-    if (object.type == sphereObject){
-
-    // implicit equation of sphere w/ radius r centred at C = 0,0,0
-    // given by (x-x0)^2 + (y-y0)^2 + (z-z0)^2 = r^2
-    // must mean any point P must satisfy
-    // (P-C) . (P-C) = r^2
-    // we have C and r we need to calc P 
-
-    // to find t (intersection to origin of the ray) we need to find its intersection (point P)
-    // if we subsitute our ray equation into point P we can work its intersection
-    // P = Origin + t * Direction lets saying P = O + tD
-    // putting it into our implicit equation of sphere
-    // (O + tD - C) . (O + tD - C) = r^2
-    // to reduce rearrange grouping togther vars we already have O and C and we also have r
-    // (O - C + tD) . (O - C + tD) = r^2
-    // O - C is the vector to get from sphere center to ray origin
-    // in doc they refer to it as L = O - C 
-
-    // L = ray.origin - object.position 
-    Vec3 sphereToOrigin = ray.origin.subtract(object.position);
-    
-    // subsitute into equation 
-    // (L + tD) . (L + tD) = r^2
-    // expand out 
-    // L . (L + tD) + tD . (L + tD)
-    // (L . L) + (L . tD) + (tD . L) + (tD . tD)
-    // t (scalar) dot product distros seperately from vecotrs remove them out with no issue
-    // (L . L) + t(L . D) + t(D . L) + t^2(D . D)
-    // group identical factors
-    // = (L . L) + 2t(L . D) + t^2(D . D)
-    // rearranging in power order
-    // t^2(D . D) + 2t(L . D) + (L . L) = r^2
-    // assign all to our vars
-    // a = D . D
-    // b = L . D
-    // c = L . L
-    // subsitute in
-    // at^2 + 2bt + c = r^2
-    // exactly like quadratic equation ax^2 + bx + c = 0 we want it equal to 0 subtract only none t component c by r^2
-    // c = L . L - r^2
-    // at^2 + 2bt + c = 0
-    
-
-    // a = D . D
-    // dot ray direction with itself
-    float a = ray.direction.dotProduct(ray.direction);
-
-    // b = L . D
-    // dot sphereToOrigin with ray.direction
-    // multiplypy b by 2 explained below
-    float b = 2.0f * sphereToOrigin.dotProduct(ray.direction);
-
-    // c = L . L - r^2
-    // dot sphereToOrigin with itself subtract sphere radius sphere to make sure its equal to zero explained below
-    float c = sphereToOrigin.dotProduct(sphereToOrigin) - (object.radius * object.radius);
-
-    // x = (-b (+/-) sqr(b^2 - 4ac)) / 2a
-
-    // solving the discrimiant gives us the amount of solutions ignore complex solutions
-    // b^2 - 4ac > 0 two real solutions
-    // b^2 - 4ac = 0 one real solution
-
-    // either ray is intersecting twice at b^2 - 4ac > 0
-    // or intersecting once b^2 - 4ac = 0
-    // one intersection is less comon it would be arond clipping edges of sphere
-    // two intersection pass throughs spehere coming out another side
-
-    // discrim = b^2 - 4ac
-    // at^2 + 2bt + c = r^2
-    // quadratic equation ax^2 + bx + c = 0
-    // at^2 + 2bt + (c - r^2) = 0
-    // d = a
-    // e = 2b
-    // f = (c - r^2)
-    // dt^2 + et + f = 0
-    // now in quadratic form
-
-    // solve for the discriminant
-    // b^2 - 4 * a * c
-    float discriminant = b * b - (4.0f * a * c);
-
-    // mentioned above check for only real solutions either discrim is greater than 0 or exactly 0
-    if (discriminant >= 0)
+__device__ bool rayIntersect(Ray ray, Object object, float &distance)
+{
+    if (object.type == sphereObject)
     {
-        // (- b - sqrt(b^2-4ac)) / 2a for nearest intersection to the camera  enter spehere
-        // (- b - sqrt(b^2-4ac)) / 2a for far intsect to cam  exit spehere
-        float closeIntersection = (-b - sqrtf(discriminant)) / (2.0f * a);
-        // float farIntersection = (-b + sqrtf(discriminant)) / (2.0f * a);
-        // for now farIntersection isnt actually used but it could be if cam movement was additioned
 
-        // as long as the intersection is infront of the camera then set the distance of this specific ray to the distance of the clostinerscection
-        if (closeIntersection > 0.001f)
+        // implicit equation of sphere w/ radius r centred at C = 0,0,0
+        // given by (x-x0)^2 + (y-y0)^2 + (z-z0)^2 = r^2
+        // must mean any point P must satisfy
+        // (P-C) . (P-C) = r^2
+        // we have C and r we need to calc P
+
+        // to find t (intersection to origin of the ray) we need to find its intersection (point P)
+        // if we subsitute our ray equation into point P we can work its intersection
+        // P = Origin + t * Direction lets saying P = O + tD
+        // putting it into our implicit equation of sphere
+        // (O + tD - C) . (O + tD - C) = r^2
+        // to reduce rearrange grouping togther vars we already have O and C and we also have r
+        // (O - C + tD) . (O - C + tD) = r^2
+        // O - C is the vector to get from sphere center to ray origin
+        // in doc they refer to it as L = O - C
+
+        // L = ray.origin - object.position
+        Vec3 sphereToOrigin = ray.origin.subtract(object.position);
+
+        // subsitute into equation
+        // (L + tD) . (L + tD) = r^2
+        // expand out
+        // L . (L + tD) + tD . (L + tD)
+        // (L . L) + (L . tD) + (tD . L) + (tD . tD)
+        // t (scalar) dot product distros seperately from vecotrs remove them out with no issue
+        // (L . L) + t(L . D) + t(D . L) + t^2(D . D)
+        // group identical factors
+        // = (L . L) + 2t(L . D) + t^2(D . D)
+        // rearranging in power order
+        // t^2(D . D) + 2t(L . D) + (L . L) = r^2
+        // assign all to our vars
+        // a = D . D
+        // b = L . D
+        // c = L . L
+        // subsitute in
+        // at^2 + 2bt + c = r^2
+        // exactly like quadratic equation ax^2 + bx + c = 0 we want it equal to 0 subtract only none t component c by r^2
+        // c = L . L - r^2
+        // at^2 + 2bt + c = 0
+
+        // a = D . D
+        // dot ray direction with itself
+        float a = ray.direction.dotProduct(ray.direction);
+
+        // b = L . D
+        // dot sphereToOrigin with ray.direction
+        // multiplypy b by 2 explained below
+        float b = 2.0f * sphereToOrigin.dotProduct(ray.direction);
+
+        // c = L . L - r^2
+        // dot sphereToOrigin with itself subtract sphere radius sphere to make sure its equal to zero explained below
+        float c = sphereToOrigin.dotProduct(sphereToOrigin) - (object.radius * object.radius);
+
+        // x = (-b (+/-) sqr(b^2 - 4ac)) / 2a
+
+        // solving the discrimiant gives us the amount of solutions ignore complex solutions
+        // b^2 - 4ac > 0 two real solutions
+        // b^2 - 4ac = 0 one real solution
+
+        // either ray is intersecting twice at b^2 - 4ac > 0
+        // or intersecting once b^2 - 4ac = 0
+        // one intersection is less comon it would be arond clipping edges of sphere
+        // two intersection pass throughs spehere coming out another side
+
+        // discrim = b^2 - 4ac
+        // at^2 + 2bt + c = r^2
+        // quadratic equation ax^2 + bx + c = 0
+        // at^2 + 2bt + (c - r^2) = 0
+        // d = a
+        // e = 2b
+        // f = (c - r^2)
+        // dt^2 + et + f = 0
+        // now in quadratic form
+
+        // solve for the discriminant
+        // b^2 - 4 * a * c
+        float discriminant = b * b - (4.0f * a * c);
+
+        // mentioned above check for only real solutions either discrim is greater than 0 or exactly 0
+        if (discriminant >= 0)
         {
-            distance = closeIntersection;
+            // (- b - sqrt(b^2-4ac)) / 2a for nearest intersection to the camera  enter spehere
+            // (- b - sqrt(b^2-4ac)) / 2a for far intsect to cam  exit spehere
+            float closeIntersection = (-b - sqrtf(discriminant)) / (2.0f * a);
+            // float farIntersection = (-b + sqrtf(discriminant)) / (2.0f * a);
+            // for now farIntersection isnt actually used but it could be if cam movement was additioned
+
+            // as long as the intersection is infront of the camera then set the distance of this specific ray to the distance of the clostinerscection
+            if (closeIntersection > 0.001f)
+            {
+                distance = closeIntersection;
+                return true;
+            }
+        }
+        return false;
+    }
+    else if (object.type == groundObject)
+    {
+        if (fabsf(ray.direction.y) < 0.0001f)
+        {
+            return false;
+        }
+
+        // for the ray plane it is much easier the intersection distance is simply
+        // the distrance from the ground to the camera divideided by the y of the ray direction
+        float intersectionDistance = (object.position.y - ray.origin.y) / ray.direction.y;
+        // make sure the intersection distance is position we shouldnt worry about intersections behind the camera
+        if (intersectionDistance > 0.001f)
+        {
+            // then we can set the ground distance to the intersection distance
+            distance = intersectionDistance;
             return true;
         }
-    }
         return false;
-    
-    } 
-    else if (object.type == groundObject){
-        if (fabsf(ray.direction.y) < 0.0001f)
-    {
-        return false;
-    }
-
-    // for the ray plane it is much easier the intersection distance is simply
-    // the distrance from the ground to the camera divideided by the y of the ray direction
-    float intersectionDistance = (object.position.y - ray.origin.y) / ray.direction.y;
-    // make sure the intersection distance is position we shouldnt worry about intersections behind the camera
-    if (intersectionDistance > 0.001f)
-    {
-        // then we can set the ground distance to the intersection distance
-        distance = intersectionDistance;
-        return true;
-    }
-    return false;
     }
 }
-
-
-
-
 
 // its described as the following
 // ks is the specular reflection const ratop pf reflection of speciular incoming light
@@ -308,9 +310,12 @@ __device__ Vec3 calcSurfaceNormal(Vec3 hitPoint, Object object)
     Vec3 surfaceNormal = objectToHit.normalise();
 
     // pass in const of groundobject
-    if (object.type == groundObject){
+    if (object.type == groundObject)
+    {
         return ground.normal;
-    } else if (object.type == sphereObject){
+    }
+    else if (object.type == sphereObject)
+    {
         return surfaceNormal;
     }
 }
@@ -377,7 +382,7 @@ __device__ Vec3 calculateSpecular(Ray ray, Light light, float distanceToObject, 
     // we can now cal S
     // S = ks * (Rm . V)^a * im,s`
 
-    Vec3 specularStrength = ims.scale(object.material.specularReflectivity * powf(reflectdotProductcamToHit, object.material.a));
+    Vec3 specularStrength = ims.scale(object.material.specularReflectivity * powf(reflectdotProductcamToHit, object.material.shininess));
     return specularStrength;
 }
 
@@ -385,7 +390,7 @@ __device__ bool isInShadow(Vec3 hitPoint, Vec3 surfaceNormal, Light light)
 {
     // passing in hitpoint surfacenormal easier
     Vec3 lightDir = calcLightDir(hitPoint, light);
-    
+
     // origin of the shadow is technically just hitpoint as thats where the light strikes the surface
     // it is common practise to adjust the origin just sligthly to prevent artifcats
     Vec3 shadowOrigin = hitPoint.addition(surfaceNormal.scale(0.001f));
@@ -402,16 +407,17 @@ __device__ bool isInShadow(Vec3 hitPoint, Vec3 surfaceNormal, Light light)
     // init shadow ray
     Ray shadowRay = {shadowOrigin, lightDir, {0.0f, 0.0f, 0.0f}};
 
-    // loop through all speheres 
+    // loop through all speheres
     // change this to introduce spherenum for scability
-    for (int i = 0; i < 2; i++){
-
-    float shadowSphereDistance;
-    if (rayIntersect(shadowRay, spheres[i], shadowSphereDistance))
+    for (int i = 0; i < 2; i++)
     {
-        if (shadowSphereDistance < shadowDistanceToLight)
-            return true;
-    }
+
+        float shadowSphereDistance;
+        if (rayIntersect(shadowRay, spheres[i], shadowSphereDistance))
+        {
+            if (shadowSphereDistance < shadowDistanceToLight)
+                return true;
+        }
     }
 
     float shadowGroundDistance;
@@ -491,7 +497,6 @@ __device__ Vec3 shadeGround(float groundDistance, Ray ray, Light light, Object g
         ground.material.colour = {0.7f, 0.7f, 0.7f};
     }
 
-    
     Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, ground);
 
     if (isInShadow(hitPoint, surfaceNormal, light))
@@ -508,8 +513,7 @@ __device__ Vec3 shadeGround(float groundDistance, Ray ray, Light light, Object g
         Vec3 phongShading = {
             fminf((ambientStrength.x + diffuseStrength.x), 1.0f),
             fminf((ambientStrength.y + diffuseStrength.y), 1.0f),
-            fminf((ambientStrength.z + diffuseStrength.z), 1.0f)
-        };
+            fminf((ambientStrength.z + diffuseStrength.z), 1.0f)};
 
         return phongShading.multiply(ground.material.colour);
     }
@@ -527,12 +531,11 @@ __device__ Vec3 shadeBackground(Ray ray, Object background)
     // gonna do blue white gradient
     Vec3 white = {1.0f, 1.0f, 1.0f};
     Vec3 blue = {0.1f, 0.1f, 1.0f};
-    
+
     Vec3 gradient = {
         (1.0f - positionition) * white.x + positionition * blue.x,
         (1.0f - positionition) * white.y + positionition * blue.y,
-        (1.0f - positionition) * white.z + positionition * blue.z
-    };
+        (1.0f - positionition) * white.z + positionition * blue.z};
 
     return gradient.multiply(background.material.colour);
 }
@@ -547,7 +550,6 @@ __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
 
     if (pixelX >= screenWidth || pixelY >= screenHeight)
         return;
-    
 
     // map pixel coords between -0.5/0.5 for x and 0.5/-0.5 Y
     float normalX = ((float)pixelX / (screenWidth - 1)) - 0.5f;
@@ -577,73 +579,75 @@ __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
     Vec3 strengthOfRay = {1.0f, 1.0f, 1.0f};
     int maxBounce = 3;
 
-    for (int i = 0; i < maxBounce; i++){
+    for (int i = 0; i < maxBounce; i++)
+    {
 
-    float sphereDistance = INFINITY;
-    int hitIndex = -1;
+        float sphereDistance = INFINITY;
+        int hitIndex = -1;
 
-    for (int s = 0; s < 2; s++){
-        float closestSphereDistance = INFINITY;
-        if (rayIntersect(ray, spheres[s], closestSphereDistance)){
-            if (closestSphereDistance < sphereDistance){
-                sphereDistance = closestSphereDistance;
-                hitIndex = s;
+        for (int s = 0; s < 2; s++)
+        {
+            float closestSphereDistance = INFINITY;
+            if (rayIntersect(ray, spheres[s], closestSphereDistance))
+            {
+                if (closestSphereDistance < sphereDistance)
+                {
+                    sphereDistance = closestSphereDistance;
+                    hitIndex = s;
+                }
             }
         }
+        bool hitSphere = (hitIndex != -1);
+
+        float groundDistance = INFINITY;
+        bool hitGround = rayIntersect(ray, ground, groundDistance);
+
+        // hitSphere and hitGround are bools for determining whether a specifced ray hit the objects
+        // they both also update their value for their respective distances whenever they run and return true
+        if (hitSphere && (!hitGround || sphereDistance < groundDistance))
+        {
+            Object hitObject = spheres[hitIndex];
+            // okay now we have to update each var depending on the results of the ray
+            // then we can calc the actual final value
+            Vec3 hitColour = shadeSphere(sphereDistance, ray, light, hitObject);
+            // as its recalling multiplyple addition next hit colour to previous multiplyplied by the current strenght
+            pixelColour = pixelColour.addition(hitColour.multiply(strengthOfRay));
+
+            strengthOfRay = strengthOfRay.scale(hitObject.material.specularReflectivity);
+
+            // update hitpoin surface normal ray dir making sure it runs shadeSphere with its new values
+            Vec3 hitPoint = ray.origin.addition(ray.direction.scale(sphereDistance));
+            Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, hitObject);
+
+            // do same as shadow ray making sure its not actually in the same point as it can cause artifcats
+            ray.origin = hitPoint.addition(surfaceNormal.scale(0.001f));
+            // then find the reflected ray
+            // different from the R = 2 * (N . L) * N - L
+            // as we are dealing with ray point from camera to hitpoint
+            // rather than the og where it from from the hitpoint to the light we use
+            // R = I - 2 * (I . N) * N
+            // I incident vector
+            // N = surfacenormal
+            // R = I - (N * (I. N) * 2)
+            ray.direction = ray.direction.subtract(surfaceNormal.scale((ray.direction.dotProduct(surfaceNormal)) * 2.0f)).normalise();
+        }
+        else if (hitGround)
+        {
+            // with ground and background not reflective currently so break out loop
+            Vec3 hitColour = shadeGround(groundDistance, ray, light, ground);
+            pixelColour = pixelColour.addition(hitColour.multiply(strengthOfRay));
+            break;
+        }
+        else
+        {
+            Vec3 hitColour = shadeBackground(ray, background);
+            pixelColour = pixelColour.addition(hitColour.multiply(strengthOfRay));
+            break;
+        }
     }
-    bool hitSphere = (hitIndex != -1);
-
-    float groundDistance = INFINITY;
-    bool hitGround = rayIntersect(ray, ground, groundDistance);
-
-    // hitSphere and hitGround are bools for determining whether a specifced ray hit the objects
-    // they both also update their value for their respective distances whenever they run and return true
-    if (hitSphere && (!hitGround || sphereDistance < groundDistance))
-    {
-        Object hitObject = spheres[hitIndex];
-        // okay now we have to update each var depending on the results of the ray 
-        // then we can calc the actual final value
-        Vec3 hitColour = shadeSphere(sphereDistance, ray, light, hitObject);
-        // as its recalling multiplyple addition next hit colour to previous multiplyplied by the current strenght
-        pixelColour = pixelColour.addition(hitColour.multiply(strengthOfRay));
-
-        strengthOfRay = strengthOfRay.scale(hitObject.material.specularReflectivity);
-        
-        // update hitpoin surface normal ray dir making sure it runs shadeSphere with its new values
-        Vec3 hitPoint = ray.origin.addition(ray.direction.scale(sphereDistance));
-        Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, hitObject);
-
-        // do same as shadow ray making sure its not actually in the same point as it can cause artifcats
-        ray.origin = hitPoint.addition(surfaceNormal.scale(0.001f));
-        // then find the reflected ray 
-        // different from the R = 2 * (N . L) * N - L
-        // as we are dealing with ray point from camera to hitpoint
-        // rather than the og where it from from the hitpoint to the light we use
-        // R = I - 2 * (I . N) * N
-        // I incident vector
-        // N = surfacenormal
-        // R = I - (N * (I. N) * 2)
-        ray.direction = ray.direction.subtract(surfaceNormal.scale((ray.direction.dotProduct(surfaceNormal)) * 2.0f)).normalise();
-
-
-    }
-    else if (hitGround)
-    {
-        // with ground and background not reflective currently so break out loop 
-        Vec3 hitColour = shadeGround(groundDistance, ray, light, ground);
-        pixelColour = pixelColour.addition(hitColour.multiply(strengthOfRay));
-        break; 
-    }
-    else
-    {
-        Vec3 hitColour = shadeBackground(ray, background);
-        pixelColour = pixelColour.addition(hitColour.multiply(strengthOfRay));
-        break; 
-    }
-}
 
     // change storing of pixel buffer to use the cuda uchar4
-    // storing rgba values 
+    // storing rgba values
 
     unsigned char r = (unsigned char)((fminf(fmaxf(pixelColour.x, 0.0f), 1.0f)) * 255.0f);
     unsigned char g = (unsigned char)((fminf(fmaxf(pixelColour.y, 0.0f), 1.0f)) * 255.0f);
@@ -651,8 +655,6 @@ __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
 
     pixels[pixelIndex] = make_uchar4(r, g, b, 255);
 }
-
-
 
 // these functions now help avoid mem being allocated everyframe
 // mem init at the start before launchraytracer loop is executed with main.cpp
@@ -671,7 +673,8 @@ void freeDevicePixels()
 }
 
 // additioned init scene to prevent reloading the scene
-void initScene(){
+void initScene()
+{
     Vec3 camPos = {0.0f, 0.0f, 0.0f};
 
     Light Hlight = {
@@ -682,60 +685,58 @@ void initScene(){
         1.0f                   // lightIntensity
     };
 
-    Object Hspheres[2];        
-    
+    Object Hspheres[2];
+
     Hspheres[0].position = {-1.5f, -0.5f, -4.0f};
     Hspheres[0].material = {
         {1.0f, 1.0f, 1.0f},
         0.1f, // ambient
-        0.1f, // diffuse 
-        0.9f, // specular 
+        0.1f, // diffuse
+        0.9f, // specular
         64.0f // shininess
-    }; 
+    };
     Hspheres[0].type = sphereObject;
-    Hspheres[0].radius = 1.0f; 
-    
-    Hspheres[1].position = {1.5f, -0.5f, -4.0f}; 
+    Hspheres[0].radius = 1.0f;
+
+    Hspheres[1].position = {1.5f, -0.5f, -4.0f};
     Hspheres[1].material = {
-        {1.0f, 0.2f, 0.2f}, 
+        {1.0f, 0.2f, 0.2f},
         0.2f, // ambient
         0.7f, // diffuse
-        0.3f, // specular 
+        0.3f, // specular
         32.0f // shininess
-    }; 
+    };
     Hspheres[1].type = sphereObject;
     Hspheres[1].radius = 1.0f;
-    
 
     Object Hground;
-    Hground.position = {0.0f, -2.0f, 0.0f}; 
+    Hground.position = {0.0f, -2.0f, 0.0f};
     Hground.material = {
-    {0.7f, 0.7f, 0.7f}, // colour
-    0.2f, // ambientReflectivity
-    0.6f, // diffuseReflectivity
-    0.1f, // specularReflectivity
-    24.0f // shininess
+        {0.7f, 0.7f, 0.7f}, // colour
+        0.2f,               // ambientReflectivity
+        0.6f,               // diffuseReflectivity
+        0.1f,               // specularReflectivity
+        24.0f               // shininess
     };
     Hground.type = groundObject;
     Hground.normal = {0.0f, 1.0f, 0.0f};
 
     Object Hbackground;
     Hbackground.material = {
-    {1.0f, 1.0f, 1.0f}, // colour
-    0.2f, // ambientReflectivity
-    0.7f, // diffuseReflectivity
-    0.5f, // specularReflectivity
-    24.0f  // shininess
+        {1.0f, 1.0f, 1.0f}, // colour
+        0.2f,               // ambientReflectivity
+        0.7f,               // diffuseReflectivity
+        0.5f,               // specularReflectivity
+        24.0f               // shininess
     };
 
     cudaMemcpyToSymbol(light, &Hlight, sizeof(Light));
     cudaMemcpyToSymbol(spheres, &Hspheres, sizeof(Object) * 2);
     cudaMemcpyToSymbol(ground, &Hground, sizeof(Object));
     cudaMemcpyToSymbol(background, &Hbackground, sizeof(Object));
-
 }
 
-float launchRayTracer(void* hostPixels, int screenWidth, int screenHeight)
+float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight)
 {
 
     // going to start implementation of performance stats
