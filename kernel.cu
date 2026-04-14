@@ -134,7 +134,7 @@ __constant__ Object background;
 // Direction (ray.direction)
 // t = distance from point of intersection to origin of the ray
 // find value of t (if intersects) use it to find the point of intersect with spehere
-/* MIGHT SPLIT THIS BACK UP INTO TWO EQUATIONS USING IFS IS INEFFICIENT*/
+/* MIGHT SPLIT THIS BACK UP INTO TWO EQUATIONS USING IFS IS INEFFICIENT CREATES SLOW DOWNS*/
 __device__ bool rayIntersect(Ray ray, Object object, float &distance)
 {
     if (object.type == sphereObject)
@@ -257,82 +257,65 @@ __device__ bool rayIntersect(Ray ray, Object object, float &distance)
     }
 }
 
-// its described as the following
-// ks is the specular reflection const ratop pf reflection of speciular incoming light
-// kd how stong surface scatters diffuse light
-// ka is reflectiveness of the material to ambient light
-// a is a shinness factor for the material larger surfaces that are smoother
-// ia interensity of ambient lighting in the scene
+// lightDirection - normalised direction vector from hit point to light position
+__device__ Vec3 calcLightDirection(Ray ray, Light light)
+{
+    Vec3 lightToHit = light.position.subtract(ray.hitPoint);
+    return lightToHit.normalise();
+}
 
-// it also defines
-// lights what are the set of all light soruces
-// Lm is the direcitiopn vector from the point on the surface towards each light source m being to specificy the light source
-// N is a normal at the point on the surface
-// Rm is direction of a perfect reflected ray would take from the pooint on the surface
-// V is the direction pointing towards the camera
+// surfaceNormal - normalised direction vector of a vector perpendicular to surface on that point
+__device__ Vec3 calcSurfaceNormal(Ray ray, Object object)
+{
+    // for sphere it is vector from centre of the sphere pointing outwards
+    // beginning at hitPoint subtract by centre to get vector from centre to hit point
+    Vec3 objectToHit = ray.hitPoint.subtract(object.position);
+
+    if (object.type == groundObject)
+    {
+        // pass using const ground normal
+        /* I DONT LIKE THIS*/
+        return object.normal.normalise();
+    }
+    else if (object.type == sphereObject)
+    {
+        // normalising getting direction vector
+        return objectToHit.normalise();
+    }
+}
+
+__device__ float calcLightDirDotNormal(Ray ray, Light light, Object object)
+{
+    return calcLightDirection(ray, light).dotProduct(calcSurfaceNormal(ray, object));
+}
+
+// must be executed on the set of all light soruces
+// Lm direction vector from point on the surface towards each light source
+// N surface normal at the point
+// Rm direction vector of reflected ray would take from the point
+// V direction vector pointing towards the camera
 
 // each point is given by the following equation of surface point Ip
 // Ip = ka * ia + Sum (of all light soruces)(kd * (Lm . N)* im,d + ks * (Rm . V)^a * im,s))
-// (ka * ia) is for the ambient light
-// (kd * (Lm . N)* im,d) is for diffuse light
-// (ks * (Rm . V)^a * im,s) is for specular
-// we can similpfy them by assigning them variables to make the equation look easier
+// similfing them assigning them variables for their unique purposes
 // A = ka * ia
 // D = kd * (Lm . N)* im,d
 // S = ks * (Rm . V)^a * im,s
 // Ip = A + Sum (of all light soruces)(D + S)
+
 __device__ Vec3 calculateAmbient(Light light, Object object)
 {
     Vec3 ambientStrength = light.ambientIntensity.scale(object.material.ambientReflectivity);
     return ambientStrength;
 }
 
-__device__ Vec3 calcLightDir(Vec3 hitPoint, Light light)
-{
-
-    // now we have the hit coords we can work out light distance and direction
-    // lightToHit vector now contains distance and direction from hit point to light source
-    Vec3 lightToHit = light.position.subtract(hitPoint);
-
-    // we normalise the lightToHit vector to only have direction vecotr
-    Vec3 lightDirection = lightToHit.normalise();
-
-    return lightDirection;
-}
-
-__device__ Vec3 calcSurfaceNormal(Vec3 hitPoint, Object object)
-{
-    // to calculate N (surface normal) we calculate vector from center of sphere to hit point then normal it
-    // again surfaceNormal currently is both direction and distance normalising will give us soley the direction
-    Vec3 objectToHit = hitPoint.subtract(object.position);
-
-    // normalise it in order to get the surface normal
-    Vec3 surfaceNormal = objectToHit.normalise();
-
-    // pass in const of groundobject
-    if (object.type == groundObject)
-    {
-        return ground.normal;
-    }
-    else if (object.type == sphereObject)
-    {
-        return surfaceNormal;
-    }
-}
-
 __device__ Vec3 calculateDiffuse(Ray ray, Light light, float distanceToObject, Object object)
 {
     // D = kd * (Lm . N)* im,d
-    Vec3 hitPoint = ray.origin.addition(ray.direction.scale(distanceToObject));
 
-    Vec3 lightDir = calcLightDir(hitPoint, light);
-    Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, object);
-
-    float lightDirdotProductSurfaceNormal = lightDir.dotProduct(surfaceNormal);
-
-    // (Lm. N) is calc in calclightDirdotProductSurfaceNormal
+    // (Lm. N) is calc in calcLightDirectiondotProductSurfaceNormal
     // clamp any negative values are 0 bcos they woukd facing qwaay from light hence no lit
-    float diffuseFactor = fmaxf(lightDirdotProductSurfaceNormal, 0.0f);
+    float diffuseFactor = fmaxf(calcLightDirDotNormal(ray, light, object), 0.0f);
 
     // im,d represents light scatter in all dirs when a light source hits suface this must be done for all light source
     Vec3 imd = light.diffuseIntensity.scale(light.lightIntensity);
@@ -347,102 +330,78 @@ __device__ Vec3 calculateDiffuse(Ray ray, Light light, float distanceToObject, O
 __device__ Vec3 calculateSpecular(Ray ray, Light light, float distanceToObject, Object object)
 {
     // S = ks * (Rm . V)^a * im,s
-    // Rm is the direction of the reflect ray from the point on the surface occuring from light source m
-    // we can calc this by reflecting the light direction across the surface normal
-    // incident vector reflection form is
+
+    // incident vector reflection from is
     // R = 2 * (L . N) * N - L
 
-    // L is lightDirection
-    // N is surfaceNormal
-
-    // where the ray intersects the obj
-    Vec3 hitPoint = ray.origin.addition(ray.direction.scale(distanceToObject));
-
-    Vec3 lightDir = calcLightDir(hitPoint, light);
-    Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, object);
-
-    float lightDirdotProductSurfaceNormal = lightDir.dotProduct(surfaceNormal);
+    // we can use our calc funcs to work out all the required elements
 
     // R = N * 2 * (L . N) - L
-    Vec3 reflectDir = surfaceNormal.scale(2.0f * lightDirdotProductSurfaceNormal).subtract(lightDir);
+    Vec3 reflectDir = calcSurfaceNormal(ray, object).scale(2.0f * calcLightDirDotNormal(ray, light, object)).subtract(calcLightDirection(ray, light));
 
-    // now we need V which is dir pointing towards cam from hit point
-    Vec3 camToHit = ray.origin.subtract(hitPoint);
+    // originToHit - V direction vector pointing from hit point to origin
+    Vec3 originToHit = (ray.origin.subtract(ray.hitPoint)).normalise();
 
-    // normalise camToHit to get V direction
-    Vec3 camToHitDirection = camToHit.normalise();
-
-    // Rm and V we can calc (Rm . V)
-    float reflectdotProductcamToHit = reflectDir.dotProduct(camToHitDirection);
-    reflectdotProductcamToHit = fmaxf(reflectdotProductcamToHit, 0.0f); // again like diffuse we clamp to 0
+    // Rm and V -> (Rm . V)
+    float reflectdotOriginToHit = reflectDir.dotProduct(originToHit);
+    reflectdotOriginToHit = fmaxf(reflectdotOriginToHit, 0.0f); // again like diffuse we clamp to 0
 
     // im,s is intesity of light scatter in all directions when the light hits surface for specular reflection
     Vec3 ims = light.specularIntensity.scale(light.lightIntensity);
 
     // we can now cal S
     // S = ks * (Rm . V)^a * im,s`
-
-    Vec3 specularStrength = ims.scale(object.material.specularReflectivity * powf(reflectdotProductcamToHit, object.material.shininess));
-    return specularStrength;
+    // S = im,s * ks * (Rm . V)^a
+    return ims.scale(object.material.specularReflectivity * powf(reflectdotOriginToHit, object.material.shininess));
 }
 
-__device__ bool isInShadow(Vec3 hitPoint, Vec3 surfaceNormal, Light light)
+__device__ bool isInShadow(Ray ray, Light light, Object object)
 {
-    // passing in hitpoint surfacenormal easier
-    Vec3 lightDir = calcLightDir(hitPoint, light);
+    // origin of shadow is hitpoint as thats where the light strikes the surface
+    // saw online common practise to adjust the origin just sligthly to prevent artifcats
+    Vec3 shadowOrigin = ray.hitPoint.addition(calcSurfaceNormal(ray, object).scale(0.001f));
 
-    // origin of the shadow is technically just hitpoint as thats where the light strikes the surface
-    // it is common practise to adjust the origin just sligthly to prevent artifcats
-    Vec3 shadowOrigin = hitPoint.addition(surfaceNormal.scale(0.001f));
+    // distance scalar from the shadow ray to the light source
+    float shadowToLightDistance = (light.position.subtract(shadowOrigin)).magnitude();
 
-    // distance from the shadow ray to the light source
-    float shadowDistanceToLight = (light.position.subtract(shadowOrigin)).magnitude();
-
-    float shadowSphereDistance;
     // reruns both intersection maths with shadow orgin instead and also initing a new shadowDistance var
     // which will be return and compared to shadowDistanceToLight
     // if shadowDistanceToLight greater than the intersection distance (shadowSphereDistance)
     // then it must mean its in shaded area
 
-    // init shadow ray
-    Ray shadowRay = {shadowOrigin, lightDir, {0.0f, 0.0f, 0.0f}};
+    Ray shadowRay = {shadowOrigin, calcLightDirection(ray, light), {0.0f, 0.0f, 0.0f}};
 
-    // loop through all speheres
-    // change this to introduce spherenum for scability
+    // loop through all spheres
+    /* CHANGE THIS SO IT CAN PASS IN THE CURRENT AMOUNT OF SPHERES IN SCENE FOR SCALABILITY */
     for (int i = 0; i < 2; i++)
     {
-
         float shadowSphereDistance;
+        // if shadowToLightDistance is greater than shadowSphereDistance
+        // then point must be in shadow
         if (rayIntersect(shadowRay, spheres[i], shadowSphereDistance))
         {
-            if (shadowSphereDistance < shadowDistanceToLight)
+            if (shadowSphereDistance < shadowToLightDistance)
                 return true;
         }
     }
 
+    // same for ground as above
     float shadowGroundDistance;
     if (rayIntersect(shadowRay, ground, shadowGroundDistance))
     {
-        if (shadowGroundDistance < shadowDistanceToLight)
+        if (shadowGroundDistance < shadowToLightDistance)
             return true;
     }
 
     return false;
 }
 
-// in order to shade the sphere we are using the phong shading model
-// it combines three different terms to create realistic reflections
-// this sis ambient, diffusal and specular
-// ambient is the soft light that illuminates all parts of a surface regardless of direct light sourecs,
-// diffusal simulates light scattering when striking a surface, a matte appearance depending on angle of light source and surface normal surfaces facing light appear bright than ones not facing
-// specular uses bright highlights occuring when light reflects off smoth ir rough surface. a lot more dynamic than thte others
-// for now only ambient and diffual are used specular is more cmoplex and will be done later
 __device__ Vec3 shadeSphere(float sphereDistance, Ray ray, Light light, Object sphere)
 {
-    Vec3 hitPoint = ray.origin.addition(ray.direction.scale(sphereDistance));
-    Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, sphere);
+    // compute hit point for shading
+    ray.hitPoint = ray.origin.addition(ray.direction.scale(sphereDistance));
 
-    if (isInShadow(hitPoint, surfaceNormal, light))
+    if (isInShadow(ray, light, sphere))
     {
         // if its in the shadow only use ambient
         return calculateAmbient(light, sphere).multiply(sphere.material.colour);
@@ -464,21 +423,22 @@ __device__ Vec3 shadeSphere(float sphereDistance, Ray ray, Light light, Object s
 }
 
 // shading of the ground is similar to sphere
-// we dont really need specular for the ground as its a matte surface
+// we dont need specular for the ground as its a matte surface
 __device__ Vec3 shadeGround(float groundDistance, Ray ray, Light light, Object ground)
 {
-    // implentning checkboard pattern to show off ground more clearly
+    // must compute
+    Vec3 hitPoint = ray.origin.addition(ray.direction.scale(groundDistance));
 
+    // title floor system
+    //  using the hit point coords we can determine which tile we are on divideing hit point by tile size
+    //  creating an int for the tiles in x and z axis as the ground is flat on the xz plane
+    //  even or odd tiles will be different colours to create a pattern
     float tileSize = 1.0f;
+
     // had to introduced an offset for the tiles as they were mirrored centring coming from the middle
     // meaning the there was two of the same tiles in the middle
     float checkerOffsetX = 0.5f;
     float checkerOffsetZ = 0.5f;
-
-    Vec3 hitPoint = ray.origin.addition(ray.direction.scale(groundDistance));
-    // using the hit point coords we can determine which tile we are on divideing hit point by tile size
-    // creating an int for the tiles in x and z axis as the ground is flat on the xz plane
-    // even or odd tiles will be different colours to create a pattern
 
     // solved the issue by additioning an offset 1/2 a tile
     // changed it to floor instead to round down
@@ -497,9 +457,7 @@ __device__ Vec3 shadeGround(float groundDistance, Ray ray, Light light, Object g
         ground.material.colour = {0.7f, 0.7f, 0.7f};
     }
 
-    Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, ground);
-
-    if (isInShadow(hitPoint, surfaceNormal, light))
+    if (isInShadow(ray, light, ground))
     {
         // if its in the shadow only use ambient`
         return calculateAmbient(light, ground).multiply(ground.material.colour);
@@ -520,7 +478,6 @@ __device__ Vec3 shadeGround(float groundDistance, Ray ray, Light light, Object g
 }
 
 // for the background gradient based on the ray direction
-
 __device__ Vec3 shadeBackground(Ray ray, Object background)
 {
     // we can use the y of the ray direction to determine how much of the background colour to show
@@ -555,16 +512,17 @@ __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
     float normalX = ((float)pixelX / (screenWidth - 1)) - 0.5f;
     float normalY = 0.5f - ((float)pixelY / (screenHeight - 1));
 
-    // these are then scaled by view port to get correct aspect ratio
+    Vec3 origin = {0.0f, 0.0f, 0.0f};
+
+    // these are then scaled by view port to get correct aspect ratio then normalise it
     Vec3 direction = {normalX * viewPortWidth, normalY * viewPortHeight, -1.0f};
-    // normalise the ray direction
     direction = direction.normalise();
 
-    // init hitPoint for now but wont be used till later
+    // init hitPoint will be calced later
     Vec3 hitPoint = {0.0f, 0.0f, 0.0f};
 
     Ray ray = {
-        {0.0f, 0.0f, 0.0f},
+        origin,
         direction,
         hitPoint
 
@@ -738,11 +696,8 @@ void initScene()
 
 float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight)
 {
-
-    // going to start implementation of performance stats
     // https://developer.nvidia.com/blog/how-implement-performance-metrics-cuda-cc/
-    // as mentioned on the nvidia blog its better to use the inbuilt functions for timings in cuda instead of
-    // cpu timings
+    // as mentioned on the nvidia blog its better to use the inbuilt functions for timings in cuda instead of cpu itmings
     // the way on the blog is the best way to go about it
 
     // starting both the cuda events
