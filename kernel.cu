@@ -369,7 +369,9 @@ __device__ bool isInShadow(Ray ray, Light light, Object object)
     // if shadowDistanceToLight greater than the intersection distance (shadowSphereDistance)
     // then it must mean its in shaded area
 
-    Ray shadowRay = {shadowOrigin, calcLightDirection(ray, light), {0.0f, 0.0f, 0.0f}};
+    // forgot this lol
+    Vec3 shadowDirection = light.position.subtract(shadowOrigin).normalise();
+    Ray shadowRay = {shadowOrigin, shadowDirection, {0.0f, 0.0f, 0.0f}};
 
     // loop through all spheres
     /* CHANGE THIS SO IT CAN PASS IN THE CURRENT AMOUNT OF SPHERES IN SCENE FOR SCALABILITY */
@@ -426,8 +428,9 @@ __device__ Vec3 shadeSphere(float sphereDistance, Ray ray, Light light, Object s
 // we dont need specular for the ground as its a matte surface
 __device__ Vec3 shadeGround(float groundDistance, Ray ray, Light light, Object ground)
 {
-    // must compute
+    // must compute need for tiles as well as rays
     Vec3 hitPoint = ray.origin.addition(ray.direction.scale(groundDistance));
+    ray.hitPoint = hitPoint;
 
     // title floor system
     //  using the hit point coords we can determine which tile we are on divideing hit point by tile size
@@ -575,7 +578,8 @@ __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
 
             // update hitpoin surface normal ray dir making sure it runs shadeSphere with its new values
             Vec3 hitPoint = ray.origin.addition(ray.direction.scale(sphereDistance));
-            Vec3 surfaceNormal = calcSurfaceNormal(hitPoint, hitObject);
+            ray.hitPoint = hitPoint;
+            Vec3 surfaceNormal = calcSurfaceNormal(ray, hitObject);
 
             // do same as shadow ray making sure its not actually in the same point as it can cause artifcats
             ray.origin = hitPoint.addition(surfaceNormal.scale(0.001f));
