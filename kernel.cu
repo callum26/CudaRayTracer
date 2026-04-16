@@ -651,11 +651,11 @@ void initScene()
 
     Hspheres[0].position = {-1.5f, -0.5f, -4.0f};
     Hspheres[0].material = {
-        {1.0f, 1.0f, 1.0f},
-        0.1f, // ambient
-        0.1f, // diffuse
-        0.9f, // specular
-        64.0f // shininess
+        {0.5f, 0.5f, 1.0f},
+        0.2f,  // ambient
+        0.4f,  // diffuse
+        0.25f, // specular
+        10.0f  // shininess
     };
     Hspheres[0].type = sphereObject;
     Hspheres[0].radius = 1.0f;
@@ -663,10 +663,10 @@ void initScene()
     Hspheres[1].position = {1.5f, -0.5f, -4.0f};
     Hspheres[1].material = {
         {1.0f, 0.2f, 0.2f},
-        0.2f, // ambient
-        0.7f, // diffuse
-        0.3f, // specular
-        32.0f // shininess
+        0.2f,  // ambient
+        0.7f,  // diffuse
+        0.18f, // specular
+        32.0f  // shininess
     };
     Hspheres[1].type = sphereObject;
     Hspheres[1].radius = 1.0f;
