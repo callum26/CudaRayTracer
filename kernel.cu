@@ -73,6 +73,17 @@ struct Vec3
         }
         return {0.0f, 0.0f, 0.0f};
     }
+
+    /*EXPLAIN THIS LATER*/
+    __device__ Vec3 cross(const Vec3 &otherVec3) const {
+        return {
+            y * otherVec3.z - z * otherVec3.y,
+            z * otherVec3.x - x * otherVec3.z,
+            x * otherVec3.y - y * otherVec3.x
+        };
+    }
+
+
 };
 
 // stores lighting properties of material
@@ -101,6 +112,8 @@ enum ObjectType
 {
     sphereObject,
     groundObject,
+    triangleObject,
+    backgroundObject
 };
 
 /* CHANGE RADIUS AND NORMAL SO ITS SEPERATE MAYBE SPLIT OBJECT INTO SPHERE GROUND STRUCTS idk*/
@@ -112,6 +125,7 @@ struct Object
 
     float radius;
     Vec3 normal;
+    Vec3 v0, v1, v2;
 };
 
 struct Ray
@@ -124,9 +138,8 @@ struct Ray
 // consts for gpu prevents recopying
 /* MAYBE BETTER WAY TO DO THIS?*/
 __constant__ Light light;
-__constant__ Object spheres[2];
-__constant__ Object ground;
-__constant__ Object background;
+__constant__ Object objects[10];
+__constant__ int objectCount;
 
 // from my reading on https://www.scratchapixel.com/lessons/3d-basic-rendering/minimal-ray-tracer-rendering-simple-shapes/ray-sphere-intersection
 // ray defoed as ray(t) = Origin + t * Direction
@@ -255,6 +268,157 @@ __device__ bool rayIntersect(Ray ray, Object object, float &distance)
         }
         return false;
     }
+    // using Moller Trumbore triangle intersection
+    // https://cadxfem.org/inf/Fast%20MinimumStorage%20RayTriangle%20Intersection.pdf
+
+    // in the paper equation described as
+    // T(u, v) = (1-u-v)V0 + uV1 + uV2
+    // u,v are barycentric coords, to express poition of any point using scalars
+    // the intersection point is T(u, v) which would be our ray equation just like sphere
+    // R(t) = O + tD
+
+    // sub that in 
+    // O + tD = (1-u-v)V0 + uV1 + vV2
+
+    // expanding this out (they do tell you in the paper but doesnt work it out so im doing it)
+    // O + tD = 1V0 - uV0 -vV0 + uV1 + vV2
+    // O + tD = V0 - uV0 -vV0 + uV1 + vV2
+    // collecting no scalar multiplied terms
+    // O - V0 = - tD - uV0 -vV0 + uV1 + vV2
+    // focusing on the right collect like terms 
+    // O - V0 = - tD + uV1 - uV0 + vV2 - vV0 
+    // then we can extract out scalars 
+    // O - V0 =  [- D, V1 - V0, + V2 - V0][t u v]
+    // giving us the same as whats in the paper
+
+    // to simplify
+    // T = O - V0
+    // E1 = V1 - V0 
+    // E2 = V2 - V0
+    // T =  [- D, E1, E2][t u v]
+    // just to mentin 
+    // [- D, E1, E2] is a 1X3 vector
+    // [t u v] is 3X1
+    // T is vector from traingles vertex to origin
+    // E1, E2 edge vectors of triangle
+    // we are trying to sole for t u v (distance, barycentric coords) respectively
+
+    // using cramers rule we can work out [t u v]
+    // first we need the determinant of [- D, E1, E2]
+    // for now we can say 
+    // det([- D, E1, E2])
+    // imagine we are multiplying this out as a 3x3 matrix
+    // [- D, E1, E2] [t, 0, 0]
+    // [- D, E1, E2] [0, u, 0]    =   T 
+    // [- D, E1, E2] [0, 0, v]
+
+    // we swap T into each coloumn seperately
+    // [T, E1, E2] 
+    // [- D, T, E2] 
+    // [- D, E1, T] 
+
+    // then we take the determaints of all of them and this creates a new 3x1 matrix
+    // [det(T, E1, E2)]
+    // [det(-D, T, E2)]
+    // [det(-D, E1, T)]
+
+    // then in order to get [t u v] we divide by the determinant of the base matrix hence
+    // (tuv is one 3x1 matrix )
+    // [t]     [det(T, E1, E2)]
+    // [u]  =  [det(-D, T, E2)]  /  det([- D, E1, E2])
+    // [v]     [det(-D, E1, T)]
+
+    // we can simplify further to remove deting everything
+    // for any three vectors A, B, C we can rewrite the det as
+    // det(A,B,C) = (A x B) . C 
+    // the same is true for every variation of this (useful for 3d gemotry)
+    // (A x B) . C = (B x C) . A = (C x A) . B
+
+    // they identified key pairs of P = (D x E2) and Q = (T x E1)
+    // were useful at reducing unnesscary math so we will focus on isolating those
+
+    // starting with 
+    // [(T x E1) . E2]
+    // [(E2 x -D) . T] 
+    // [(E1 x T) . -D]
+    // P and Q are defined the other way round useful bcos we can cancel out the negatives
+    // we will pull them out first
+    // [(T x E1) . E2]
+    // [-((E2 x D) . T)] 
+    // [-((E1 x T) . D)]
+    // once pulled out we can flip terms to make it negative
+    // [(T x E1) . E2]
+    // [-(-(D x E2) . T)] 
+    // [-(-(T x E1) . D)]
+    // double negatives cancel out
+    // [(T x E1) . E2]
+    // [(D x E2) . T] 
+    // [(T x E1) . D]
+    // the final part of the dividor
+    // det([- D, E1, E2]) = (E2 x -D) . E1
+    // we do same as above pull out minus and flip terms so it fits our P definition
+    //(D x E2) . E1
+
+    // just to repeat we now have
+    // [t]     [(T x E1) . E2]
+    // [u]  =  [(D x E2) . T]   /  (D x E2) . E1
+    // [v]     [(T x E1) . D]
+    
+    // then sub in P and Q
+    // [t]     [Q . E2]
+    // [u]  =  [P . T ]   / P . E1
+    // [v]     [Q . D ]
+
+    // t = Q . E2 / P . E1
+    // u = P . T  / P . E1
+    // v = Q . D  / P . E1
+
+    // sumarry
+    // P = (D x E2) 
+    // Q = (T x E1)
+
+    // T = O - V0
+    // E1 = V1 - V0 
+    // E2 = V2 - V0
+
+    // D ray direction
+    else if (object.type == triangleObject){
+        // both edges of the triangle 
+        Vec3 edge1 = object.v1.subtract(object.v0);
+        Vec3 edge2 = object.v2.subtract(object.v0);
+
+        Vec3 T = ray.origin.subtract(object.v0);
+        /* COME UP WITH BETTER VAR NAMES LATER*/
+        Vec3 P = ray.direction.cross(edge2);
+        Vec3 Q = T.cross(edge1);
+
+        float baseDet = P.dotProduct(edge1);
+
+        // just like ground if parallel no bother or near zero
+        if (fabsf(baseDet) < 0.0001f)
+        {
+            return false;
+        }
+
+        float t = Q.dotProduct(edge2) / baseDet;
+        float u = P.dotProduct(T) / baseDet;
+        float v = Q.dotProduct(ray.direction) / baseDet;
+
+        // also coords u, v must be between 0 and 1
+        // and also must add between 0 and 1 so we check
+        if (u < 0.0f || u > 1.0f) return false; // false if outside range
+        if (v < 0.0f || u + v > 1.0f) return false; // check for less than 0 and combined check for u + v
+
+        if (t > 0.001f){
+            distance = t;
+            return true;
+        }
+        return false;
+
+    }
+    else {
+        return false;
+    }
 }
 
 // lightDirection - normalised direction vector from hit point to light position
@@ -269,7 +433,7 @@ __device__ Vec3 calcSurfaceNormal(Ray ray, Object object)
 {
     // for sphere it is vector from centre of the sphere pointing outwards
     // beginning at hitPoint subtract by centre to get vector from centre to hit point
-    Vec3 objectToHit = ray.hitPoint.subtract(object.position);
+
 
     if (object.type == groundObject)
     {
@@ -280,7 +444,13 @@ __device__ Vec3 calcSurfaceNormal(Ray ray, Object object)
     else if (object.type == sphereObject)
     {
         // normalising getting direction vector
-        return objectToHit.normalise();
+        return ray.hitPoint.subtract(object.position).normalise();
+    }
+    else if (object.type == triangleObject){
+        // cross product of E2 X E1 to get the normal
+        Vec3 edge1 = object.v1.subtract(object.v0);
+        Vec3 edge2 = object.v2.subtract(object.v0);
+        return edge2.cross(edge1).normalise();
     }
 }
 
@@ -359,7 +529,7 @@ __device__ bool isInShadow(Ray ray, Light light, Object object)
 {
     // origin of shadow is hitpoint as thats where the light strikes the surface
     // saw online common practise to adjust the origin just sligthly to prevent artifcats
-    Vec3 shadowOrigin = ray.hitPoint.addition(calcSurfaceNormal(ray, object).scale(0.001f));
+    Vec3 shadowOrigin = ray.hitPoint.addition(calcSurfaceNormal(ray, object).scale(0.005f));
 
     // distance scalar from the shadow ray to the light source
     float shadowToLightDistance = (light.position.subtract(shadowOrigin)).magnitude();
@@ -369,30 +539,26 @@ __device__ bool isInShadow(Ray ray, Light light, Object object)
     // if shadowDistanceToLight greater than the intersection distance (shadowSphereDistance)
     // then it must mean its in shaded area
 
-    // forgot this lol
     Vec3 shadowDirection = light.position.subtract(shadowOrigin).normalise();
     Ray shadowRay = {shadowOrigin, shadowDirection, {0.0f, 0.0f, 0.0f}};
 
-    // loop through all spheres
-    /* CHANGE THIS SO IT CAN PASS IN THE CURRENT AMOUNT OF SPHERES IN SCENE FOR SCALABILITY */
-    for (int i = 0; i < 2; i++)
+    // loop through all objects
+
+
+    for (int o = 0; o < objectCount; o++)
     {
-        float shadowSphereDistance;
-        // if shadowToLightDistance is greater than shadowSphereDistance
+        // skip ground  background objects from shadow casting
+        if (objects[o].type == groundObject || objects[o].type == backgroundObject)
+            continue;
+            
+        float shadowObjectDistance;
+        // if shadowToLightDistance is greater than shadowObjectDistance
         // then point must be in shadow
-        if (rayIntersect(shadowRay, spheres[i], shadowSphereDistance))
+        if (rayIntersect(shadowRay, objects[o], shadowObjectDistance))
         {
-            if (shadowSphereDistance < shadowToLightDistance)
+            if (shadowObjectDistance < shadowToLightDistance)
                 return true;
         }
-    }
-
-    // same for ground as above
-    float shadowGroundDistance;
-    if (rayIntersect(shadowRay, ground, shadowGroundDistance))
-    {
-        if (shadowGroundDistance < shadowToLightDistance)
-            return true;
     }
 
     return false;
@@ -500,6 +666,32 @@ __device__ Vec3 shadeBackground(Ray ray, Object background)
     return gradient.multiply(background.material.colour);
 }
 
+__device__ Vec3 shadeTriangle(float triangleDistance, Ray ray, Light light, Object triangle)
+{
+    // compute hit point for shading
+    ray.hitPoint = ray.origin.addition(ray.direction.scale(triangleDistance));
+
+    if (isInShadow(ray, light, triangle))
+    {
+        // if its in the shadow only use ambient
+        return calculateAmbient(light, triangle).multiply(triangle.material.colour);
+    }
+    else
+    {
+        Vec3 ambientStrength = calculateAmbient(light, triangle);
+        Vec3 diffuseStrength = calculateDiffuse(ray, light, triangleDistance, triangle);
+        Vec3 specularStrength = calculateSpecular(ray, light, triangleDistance, triangle);
+
+        // Ip = A + D + S
+        Vec3 phongShading = {
+            fminf((ambientStrength.x + diffuseStrength.x + specularStrength.x), 1.0f),
+            fminf((ambientStrength.y + diffuseStrength.y + specularStrength.y), 1.0f),
+            fminf((ambientStrength.z + diffuseStrength.z + specularStrength.z), 1.0f)};
+
+        return phongShading.multiply(triangle.material.colour);
+    }
+}
+
 __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
 {
     int pixelX = blockIdx.x * blockDim.x + threadIdx.x;
@@ -542,42 +734,41 @@ __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
 
     for (int i = 0; i < maxBounce; i++)
     {
+        float objectDistance = INFINITY;
+        int objectIndex = -1;
 
-        float sphereDistance = INFINITY;
-        int hitIndex = -1;
-
-        for (int s = 0; s < 2; s++)
+        for (int o = 0; o < objectCount; o++)
         {
-            float closestSphereDistance = INFINITY;
-            if (rayIntersect(ray, spheres[s], closestSphereDistance))
+            float closestObjectDistance = INFINITY;
+            if (rayIntersect(ray, objects[o], closestObjectDistance))
             {
-                if (closestSphereDistance < sphereDistance)
+                if (closestObjectDistance < objectDistance)
                 {
-                    sphereDistance = closestSphereDistance;
-                    hitIndex = s;
+                    objectDistance = closestObjectDistance;
+                    objectIndex = o;
+
                 }
             }
         }
-        bool hitSphere = (hitIndex != -1);
+        bool hitObject = (objectIndex != -1);
+        
 
-        float groundDistance = INFINITY;
-        bool hitGround = rayIntersect(ray, ground, groundDistance);
 
         // hitSphere and hitGround are bools for determining whether a specifced ray hit the objects
         // they both also update their value for their respective distances whenever they run and return true
-        if (hitSphere && (!hitGround || sphereDistance < groundDistance))
-        {
-            Object hitObject = spheres[hitIndex];
+        if (hitObject && objects[objectIndex].type == sphereObject)
+        {   
+            Object hitObject = objects[objectIndex];
             // okay now we have to update each var depending on the results of the ray
             // then we can calc the actual final value
-            Vec3 hitColour = shadeSphere(sphereDistance, ray, light, hitObject);
+            Vec3 hitColour = shadeSphere(objectDistance, ray, light, hitObject);
             // as its recalling multiplyple addition next hit colour to previous multiplyplied by the current strenght
             pixelColour = pixelColour.addition(hitColour.multiply(strengthOfRay));
 
             strengthOfRay = strengthOfRay.scale(hitObject.material.specularReflectivity);
 
             // update hitpoin surface normal ray dir making sure it runs shadeSphere with its new values
-            Vec3 hitPoint = ray.origin.addition(ray.direction.scale(sphereDistance));
+            Vec3 hitPoint = ray.origin.addition(ray.direction.scale(objectDistance));
             ray.hitPoint = hitPoint;
             Vec3 surfaceNormal = calcSurfaceNormal(ray, hitObject);
 
@@ -593,16 +784,52 @@ __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
             // R = I - (N * (I. N) * 2)
             ray.direction = ray.direction.subtract(surfaceNormal.scale((ray.direction.dotProduct(surfaceNormal)) * 2.0f)).normalise();
         }
-        else if (hitGround)
+        else if (hitObject && objects[objectIndex].type == groundObject)
         {
             // with ground and background not reflective currently so break out loop
-            Vec3 hitColour = shadeGround(groundDistance, ray, light, ground);
+            Vec3 hitColour = shadeGround(objectDistance, ray, light, objects[objectIndex]);
             pixelColour = pixelColour.addition(hitColour.multiply(strengthOfRay));
             break;
         }
-        else
+        else if (hitObject && objects[objectIndex].type == backgroundObject)
         {
-            Vec3 hitColour = shadeBackground(ray, background);
+            Vec3 hitColour = shadeBackground(ray, objects[objectIndex]);
+            pixelColour = pixelColour.addition(hitColour.multiply(strengthOfRay));
+            break;
+        } 
+        else if (hitObject && objects[objectIndex].type == triangleObject){
+            // copy same from sphere
+            Object hitObject = objects[objectIndex];
+            // okay now we have to update each var depending on the results of the ray
+            // then we can calc the actual final value
+            Vec3 hitColour = shadeTriangle(objectDistance, ray, light, hitObject);
+            // as its recalling multiplyple addition next hit colour to previous multiplyplied by the current strenght
+            pixelColour = pixelColour.addition(hitColour.multiply(strengthOfRay));
+
+            strengthOfRay = strengthOfRay.scale(hitObject.material.specularReflectivity);
+
+            // update hitpoin surface normal ray dir making sure it runs shadeSphere with its new values
+            Vec3 hitPoint = ray.origin.addition(ray.direction.scale(objectDistance));
+            ray.hitPoint = hitPoint;
+            Vec3 surfaceNormal = calcSurfaceNormal(ray, hitObject);
+
+            // do same as shadow ray making sure its not actually in the same point as it can cause artifcats
+            ray.origin = hitPoint.addition(surfaceNormal.scale(0.001f));
+            // then find the reflected ray
+            // different from the R = 2 * (N . L) * N - L
+            // as we are dealing with ray point from camera to hitpoint
+            // rather than the og where it from from the hitpoint to the light we use
+            // R = I - 2 * (I . N) * N
+            // I incident vector
+            // N = surfacenormal
+            // R = I - (N * (I. N) * 2)
+            ray.direction = ray.direction.subtract(surfaceNormal.scale((ray.direction.dotProduct(surfaceNormal)) * 2.0f)).normalise();
+
+        } 
+        else if (!hitObject)
+        {
+            // no object hit fallback 
+            Vec3 hitColour = shadeBackground(ray, objects[objectCount - 1]);
             pixelColour = pixelColour.addition(hitColour.multiply(strengthOfRay));
             break;
         }
@@ -647,55 +874,79 @@ void initScene()
         1.0f                   // lightIntensity
     };
 
-    Object Hspheres[2];
+    Object Hobjects[10];
+    int HobjectCount = 0;
 
-    Hspheres[0].position = {-1.5f, -0.5f, -4.0f};
-    Hspheres[0].material = {
+    //sphere 1
+    Hobjects[HobjectCount].position = {-1.5f, -0.5f, -4.0f};
+    Hobjects[HobjectCount].material = {
         {0.5f, 0.5f, 1.0f},
         0.2f,  // ambient
         0.4f,  // diffuse
         0.25f, // specular
         10.0f  // shininess
     };
-    Hspheres[0].type = sphereObject;
-    Hspheres[0].radius = 1.0f;
+    Hobjects[HobjectCount].type = sphereObject;
+    Hobjects[HobjectCount].radius = 1.0f;
+    HobjectCount++;
 
-    Hspheres[1].position = {1.5f, -0.5f, -4.0f};
-    Hspheres[1].material = {
+    //sphere 2
+    Hobjects[HobjectCount].position = {1.5f, -0.5f, -4.0f};
+    Hobjects[HobjectCount].material = {
         {1.0f, 0.2f, 0.2f},
         0.2f,  // ambient
         0.7f,  // diffuse
         0.18f, // specular
         32.0f  // shininess
     };
-    Hspheres[1].type = sphereObject;
-    Hspheres[1].radius = 1.0f;
+    Hobjects[HobjectCount].type = sphereObject;
+    Hobjects[HobjectCount].radius = 1.0f;
+    HobjectCount++;
 
-    Object Hground;
-    Hground.position = {0.0f, -2.0f, 0.0f};
-    Hground.material = {
+    // ground
+    Hobjects[HobjectCount].position = {0.0f, -2.0f, 0.0f};
+    Hobjects[HobjectCount].material = {
         {0.7f, 0.7f, 0.7f}, // colour
         0.2f,               // ambientReflectivity
         0.6f,               // diffuseReflectivity
         0.1f,               // specularReflectivity
         24.0f               // shininess
     };
-    Hground.type = groundObject;
-    Hground.normal = {0.0f, 1.0f, 0.0f};
+    Hobjects[HobjectCount].type = groundObject;
+    Hobjects[HobjectCount].normal = {0.0f, 1.0f, 0.0f};
+    HobjectCount++;
 
-    Object Hbackground;
-    Hbackground.material = {
+    /*TEST DATA*/
+    // wall
+    Hobjects[HobjectCount].v0 = {-3.0f,  3.0f, -8.0f};
+    Hobjects[HobjectCount].v1 = { 3.0f,  3.0f, -8.0f};
+    Hobjects[HobjectCount].v2 = {-3.0f, -3.0f, -8.0f};
+    Hobjects[HobjectCount].material = {{1.0f, 1.0f, 1.0f}, 0.2f, 0.7f, 0.0f, 1.0f};
+    Hobjects[HobjectCount].type = triangleObject;
+    HobjectCount++;
+    //wall 2
+    Hobjects[HobjectCount].v0 = { 3.0f,  3.0f, -8.0f};
+    Hobjects[HobjectCount].v1 = { 3.0f, -3.0f, -8.0f};
+    Hobjects[HobjectCount].v2 = {-3.0f, -3.0f, -8.0f};
+    Hobjects[HobjectCount].material = Hobjects[HobjectCount-1].material;
+    Hobjects[HobjectCount].type = triangleObject;
+    HobjectCount++;
+
+    // background
+    Hobjects[HobjectCount].material = {
         {1.0f, 1.0f, 1.0f}, // colour
         0.2f,               // ambientReflectivity
         0.7f,               // diffuseReflectivity
         0.5f,               // specularReflectivity
         24.0f               // shininess
     };
+    Hobjects[HobjectCount].type = backgroundObject;
+    HobjectCount++;
+   
 
     cudaMemcpyToSymbol(light, &Hlight, sizeof(Light));
-    cudaMemcpyToSymbol(spheres, &Hspheres, sizeof(Object) * 2);
-    cudaMemcpyToSymbol(ground, &Hground, sizeof(Object));
-    cudaMemcpyToSymbol(background, &Hbackground, sizeof(Object));
+    cudaMemcpyToSymbol(objects, &Hobjects, sizeof(Object) * HobjectCount);
+    cudaMemcpyToSymbol(objectCount, &HobjectCount, sizeof(int));
 }
 
 float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight)
