@@ -137,11 +137,155 @@ struct Ray
     Vec3 hitPoint;
 };
 
+// starting BVH to optimise calculations
+// to start we need to create a bounding box struct for our object
+// commonly used is a axis aligned bounding box or AABB
+// a 3D box containing the object where edges are locked to axes and not roated
+// cube so we only need min axes and max
+struct AABB
+{
+    Vec3 boxMin, boxMax;
+};
+
+// as a BVH is a tree structure we need a tree structure :)
+// node doesnt
+struct BVHNode
+{
+    // contains our bounding box
+    AABB box;
+    // and its index within the tree (for our nodes)
+    int leftIndex;
+    int rightIndex;
+    // we also need to store where the object array starts in a seprate arry
+    int firstObject;
+    // and how many object there are within the leaf node
+    int objectCount;
+};
+
+// also we need a seperate struct to store object index refferencing its bounds and centroid
+// a centroid is basically the centre of mass of given object
+// we need the centre of the bounding box quite simple
+struct BuildObject
+{
+    AABB bounds;
+    Vec3 centroid;
+    int objectIndex;
+};
+
 // consts for gpu prevents recopying
 /* MAYBE BETTER WAY TO DO THIS?*/
 __constant__ Light light;
 __constant__ Object objects[20];
 __constant__ int objectCount;
+
+__device__ Vec3 centroidAABB(const AABB &box)
+{
+    return {
+        0.5f * (box.boxMin.x + box.boxMax.x),
+        0.5f * (box.boxMin.y + box.boxMax.y),
+        0.5f * (box.boxMin.z + box.boxMax.z)};
+}
+
+// now we need to create bounds of each type of object
+// only two for now
+/* COULD DEFINE SPHERE OUT OF TRIANGLE WOULD BE VERY COMPLEX BUT WOULD REMOVE A LOT OF REDUNNAT CKDE BUT MAY BE OUT OF SCOPE OF THIS PROJECT  */
+__device__ AABB boundsOf(const Object &object)
+{
+    AABB box;
+    if (object.type == sphereObject)
+    {
+        // we can use radius of sphere to calc the bounding box
+        Vec3 radius = {object.radius, object.radius, object.radius};
+        // object.pos is centre of object so subtracting or adding of the radius is gonna give the edges
+        // around the sphere, which is the bounding box coords
+        box.boxMin = object.position.subtract(radius);
+        box.boxMax = object.position.addition(radius);
+
+        // for triangle
+    }
+    else
+    {
+        // taking the minimum of each verticies for every coord
+        box.boxMin = {
+            fminf(object.v0.x, fminf(object.v1.x, object.v2.x)),
+            fminf(object.v0.y, fminf(object.v1.y, object.v2.y)),
+            fminf(object.v0.z, fminf(object.v1.z, object.v2.z))};
+        // taking the max of each verticies for every coord
+        box.boxMax = {
+            fmaxf(object.v0.x, fmaxf(object.v1.x, object.v2.x)),
+            fmaxf(object.v0.y, fmaxf(object.v1.y, object.v2.y)),
+            fmaxf(object.v0.z, fmaxf(object.v1.z, object.v2.z))};
+        return box;
+    }
+}
+
+__device__ float getComponent(const Vec3 &vector, int axisIndex)
+{
+    switch (axisIndex)
+    {
+    case 0:
+        return vector.x;
+    case 1:
+        return vector.y;
+    case 2:
+        return vector.z;
+    }
+}
+
+__device__ bool hitAABB(const Ray &ray, const AABB &box)
+{
+    AABB boxHit;
+    Ray boxRay;
+    // simialr to our ray intersection we need to find
+    // the ray distance min and max to find where we should focus the intersection on
+    // if ray is outside of these ranges it hasnt hit the box
+    float rayMinDistance = 0.001f;
+    float rayMaxDistance = INFINITY;
+
+    // as we know
+    // R = O + tD
+    // same with other interesctions if we assume a point P to be our ray equation
+    // P = O + tD
+    // sub in the min and max point for our AABB we calc
+    // P(min) = O + tD
+    // P(max) = O + tD
+    // but unlike sphere intersection test we know what points we are calculating
+    // we need to rearrange to find for t(min) and t(max)
+    // t(min) = (P - O) / D
+    // t(max) = (P - O) / D
+    // each xyz is calculated respective of one another so we repeat the equation 3 times
+    // so need to loop through each axes
+
+    for (int i = 0; i < 3; i++)
+    {
+        // get all components need for each
+        float rayOrigin = getComponent(boxRay.origin, i);
+        float rayDirection = getComponent(boxRay.direction, i);
+        float boxMin = getComponent(boxHit.boxMin, i);
+        float boxMax = getComponent(boxHit.boxMax, i);
+
+        // classic bcos we r diving more than once store it
+        float inverseDirection = 1.0f / rayDirection;
+        float rayNearHit = (boxMin - rayOrigin) * inverseDirection;
+        float rayFarHit = (boxMax - rayOrigin) * inverseDirection;
+
+        // if direction is negative we need to swap the near and far as they will be inversed
+        // ensuring near is always the smallest and far is always largest
+        if (inverseDirection < 0.0f)
+        {
+            float temp = rayNearHit;
+            rayNearHit = rayFarHit;
+            rayFarHit = temp;
+        }
+
+        // clamp them to our bounds at the top of the func
+        rayMinDistance = fmaxf(rayMinDistance, rayNearHit);
+        rayMaxDistance = fminf(rayMaxDistance, rayFarHit);
+    }
+    if (rayMaxDistance < rayMinDistance)
+        return false; // if min exceeds max then it must no longe be in box
+    return true;
+}
 
 // from my reading on https://www.scratchapixel.com/lessons/3d-basic-rendering/minimal-ray-tracer-rendering-simple-shapes/ray-sphere-intersection
 // ray defoed as ray(t) = Origin + t * Direction
@@ -411,13 +555,6 @@ __device__ bool rayIntersect(const Ray &ray, const Object &object, float &distan
     }
 }
 
-// lightDirection - normalised direction vector from hit point to light position
-__device__ Vec3 calcLightDirection(const Ray &ray, const Light &light)
-{
-    Vec3 lightToHit = light.position.subtract(ray.hitPoint);
-    return lightToHit.normalise();
-}
-
 // surfaceNormal - normalised direction vector of a vector perpendicular to surface on that point
 __device__ Vec3 calcSurfaceNormal(const Ray &ray, const Object &object)
 {
@@ -453,16 +590,6 @@ __device__ bool isInside(const Ray &ray, const Vec3 normal)
     return ray.direction.dotProduct(normal) > 0.0f;
 }
 
-__device__ float calcLightDirDotNormal(const Ray &ray, const Light &light, const Object &object)
-{
-    Vec3 surfaceNormal = calcSurfaceNormal(ray, object);
-    if (isInside(ray, surfaceNormal))
-    {
-        surfaceNormal = surfaceNormal.scale(-1.0f);
-    }
-    return calcLightDirection(ray, light).dotProduct(surfaceNormal);
-}
-
 // must be executed on the set of all light soruces
 // Lm direction vector from point on the surface towards each light source
 // N surface normal at the point
@@ -486,13 +613,22 @@ __device__ Vec3 calculateAmbient(const Light &light, const Object &object)
 __device__ Vec3 calculateDiffuse(const Ray &ray, const Light &light, float distanceToObject, const Object &object)
 {
     // D = kd * (Lm . N)* im,d
+    Vec3 surfaceNormal = calcSurfaceNormal(ray, object);
+    Vec3 lightToHit = light.position.subtract(ray.hitPoint);
+    float lightDistance = lightToHit.magnitude();
+    Vec3 lightDirection = lightToHit.normalise();
+
+    if (isInside(ray, surfaceNormal))
+    {
+        surfaceNormal = surfaceNormal.scale(-1.0f);
+    }
+
     // inverse square law light decreases inverse squared
-    float lightDistance = light.position.subtract(ray.hitPoint).magnitude();
     // clamping prevents div by 0 or near zero
     float lightScaling = 1.0f / fmaxf(0.01f, (lightDistance * lightDistance));
     // (Lm. N) is calc in calcLightDirectiondotProductSurfaceNormal
     // clamp any negative values are 0 bcos they woukd facing qwaay from light hence no lit
-    float diffuseFactor = __saturatef(calcLightDirDotNormal(ray, light, object));
+    float diffuseFactor = __saturatef(lightDirection.dotProduct(surfaceNormal));
 
     // im,d represents light scatter in all dirs when a light source hits suface this must be done for all light source
     Vec3 imd = light.diffuseIntensity.scale(light.lightIntensity * lightScaling);
@@ -515,11 +651,17 @@ __device__ Vec3 calculateSpecular(const Ray &ray, const Light &light, float dist
 
     // R = N * 2 * (L . N) - L
     Vec3 surfaceNormal = calcSurfaceNormal(ray, object);
+    Vec3 lightToHit = light.position.subtract(ray.hitPoint);
+    float lightDistance = lightToHit.magnitude();
+    Vec3 lightDirection = lightToHit.normalise();
+
     if (isInside(ray, surfaceNormal))
     {
         surfaceNormal = surfaceNormal.scale(-1.0f);
     }
-    Vec3 reflectDir = surfaceNormal.scale(2.0f * calcLightDirDotNormal(ray, light, object)).subtract(calcLightDirection(ray, light));
+
+    float lightDotNormal = __saturatef(lightDirection.dotProduct(surfaceNormal));
+    Vec3 reflectDir = surfaceNormal.scale(2.0f * lightDotNormal).subtract(lightDirection);
 
     // originToHit - V direction vector pointing from hit point to origin
     Vec3 originToHit = (ray.origin.subtract(ray.hitPoint)).normalise();
@@ -589,7 +731,7 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
     Ray shadeRay = ray;
     shadeRay.hitPoint = shadeRay.origin.addition(shadeRay.direction.scale(objectDistance));
 
-    const int lightSamples = 32;
+    const int lightSamples = 8;
 
     float shadowOffset = 0.001f;
     Vec3 shadowNormal = calcSurfaceNormal(shadeRay, object);
@@ -695,12 +837,21 @@ __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
         // every time ray bounces its strength is reduced
         Vec3 pixelColour = {0.0f, 0.0f, 0.0f};
         Vec3 strengthOfRay = {1.0f, 1.0f, 1.0f};
-        const int maxBounce = 6;
+        const int maxBounce = 4;
 
         for (int i = 0; i < maxBounce; i++)
         {
             float objectDistance = INFINITY;
             int objectIndex = -1;
+
+            AABB sceneBounds;
+            sceneBounds.boxMin = {-3.0f, -3.0f, -8.0f};
+            sceneBounds.boxMax = {3.0f, 3.0f, 1.0f};
+
+            if (!hitAABB(ray, sceneBounds))
+            {
+                break;
+            }
 
             for (int o = 0; o < objectCount; o++)
             {
@@ -715,7 +866,6 @@ __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
                 }
             }
 
-            // hitSphere and hitGround are bools for determining whether a specifced ray hit the objects
             // they both also update their value for their respective distances whenever they run and return true
             if (objectIndex != -1)
             {
@@ -747,7 +897,7 @@ __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
                     else
                     {
                         refractionRatio = 1.0f / hitObject.material.refraction;
-                                        }
+                    }
                     cosTheta = __saturatef(-ray.direction.dotProduct(surfaceNormal));
                     // schlicks approximation fresnsel factor in specular reflection
                     // it is defined as
@@ -1012,10 +1162,15 @@ float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight)
     // as mentioned on the nvidia blog its better to use the inbuilt functions for timings in cuda instead of cpu itmings
     // the way on the blog is the best way to go about it
 
-    // starting both the cuda events
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    // change to stop destroying events every frame
+    static cudaEvent_t start, stop;
+    static bool eventReady = false;
+    if (!eventReady)
+    {
+        cudaEventCreate(&start);
+        cudaEventCreate(&stop);
+        eventReady = true;
+    }
 
     // 256 threads per block (16x16)
     dim3 blockSize(16, 16);
@@ -1025,20 +1180,13 @@ float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight)
     cudaEventRecord(start);
     renderKernel<<<gridSize, blockSize>>>(devicePixels, screenWidth, screenHeight);
     cudaEventRecord(stop);
-    // stops and fills records once its finished
 
-    cudaDeviceSynchronize();
-
+    cudaEventSynchronize(stop);
     cudaMemcpy(hostPixels, devicePixels, screenWidth * screenHeight * 4, cudaMemcpyDeviceToHost);
 
-    // forcing cpu to halt until gpu finishes
-    cudaEventSynchronize(stop);
     float ms = 0;
     // calcs the difference
     cudaEventElapsedTime(&ms, start, stop);
-
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
 
     return ms;
 }
