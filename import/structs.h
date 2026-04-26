@@ -1,3 +1,6 @@
+#ifndef STRUCTS_H
+#define STRUCTS_H
+
 #include <cuda_runtime.h>
 #include <cmath>
 
@@ -166,3 +169,5 @@ struct SAHBucket
     int count;
     AABB bounds;
 };
+
+#endif

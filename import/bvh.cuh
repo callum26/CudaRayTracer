@@ -1,3 +1,6 @@
+#ifndef BVH_CUH
+#define BVH_CUH
+
 #include <cuda_runtime.h>
 #include "structs.h"
 
@@ -419,3 +422,5 @@ __host__ int buildBVH(BuildObject *objs, int start, int end, BVHNode *nodes, int
     node.rightIndex = buildBVH(objs, mid, end, nodes, nodeCount);
     return nodeIdx;
 }
+
+#endif
