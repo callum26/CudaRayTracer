@@ -6,9 +6,17 @@
 
 // stores a 3D vector with coords xyz
 // vital part of the whole program
+// added union allowing array indexing 0,1,2 for AABB tests
 struct Vec3
 {
-    float x, y, z;
+    union
+    {
+        struct
+        {
+            float x, y, z;
+        };          // keep og xyz
+        float v[3]; // then indexing
+    };
 
     // calculations for commonly needed vector maths
     // otherVec3 passed in via reference to prevent not needed copies

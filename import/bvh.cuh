@@ -45,20 +45,10 @@ __host__ __device__ AABB boundsOf(const Object &object)
     return box;
 }
 
-// depending on axisIndex corresponding vector component it returned
+// using new direct aray index
 __host__ __device__ float getAxisComponent(const Vec3 &vector, int axisIndex)
 {
-    switch (axisIndex)
-    {
-    case 0:
-        return vector.x;
-    case 1:
-        return vector.y;
-    case 2:
-        return vector.z;
-    default:
-        return 0.0f;
-    }
+    return vector.v[axisIndex];
 }
 
 // happens a lot so quite useful to have

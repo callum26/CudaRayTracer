@@ -124,14 +124,15 @@ __device__ bool rayIntersect(const Ray &ray, const Object &object, float &distan
         {
             // (- b - sqrt(b^2-4ac)) / 2a for nearest intersection to the camera  enter spehere
             // (- b - sqrt(b^2-4ac)) / 2a for far intsect to cam  exit spehere
-            float closeIntersection = (-b - sqrtf(discriminant)) / (2.0f * a);
+            inv2A = 1.0f / (2.0f * a);
+            float closeIntersection = (-b - sqrtf(discriminant)) * inv2A;
             if (closeIntersection > 0.001f)
             {
                 distance = closeIntersection;
                 return true;
             }
 
-            float farIntersection = (-b + sqrtf(discriminant)) / (2.0f * a);
+            float farIntersection = (-b + sqrtf(discriminant)) * inv2A;
             if (farIntersection > 0.001f)
             {
                 distance = farIntersection;
@@ -273,9 +274,12 @@ __device__ bool rayIntersect(const Ray &ray, const Object &object, float &distan
             return false;
         }
 
-        float t = Q.dot(edge2) / baseDet;
-        float u = P.dot(T) / baseDet;
-        float v = Q.dot(ray.direction) / baseDet;
+        // prevents dividing 3 trimes
+        float invDet = 1.0f / baseDet
+
+                       float t = Q.dot(edge2) * invDet;
+        float u = P.dot(T) * invDet;
+        float v = Q.dot(ray.direction) * invDet;
 
         // also coords u, v must be between 0 and 1
         // and also must add between 0 and 1 so we check
@@ -510,7 +514,7 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
     Ray shadeRay = ray;
     shadeRay.hitPoint = shadeRay.origin + (shadeRay.direction * objectDistance);
 
-    const int lightSamples = 4;
+    const int lightSamples = 1;
 
     float shadowOffset = 0.001f;
     Vec3 shadowOrigin = shadeRay.hitPoint + (surfaceNormal * shadowOffset);
@@ -562,8 +566,9 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
 
     // Ip = ka * ia + Sum (of all light soruces)(kd * (Lm . N)* im,d + ks * (Rm . V)^a * im,s))
     Vec3 finalAmbient = light.ambientIntensity * object.material.ambientReflectivity;
-    Vec3 finalDiffuse = accumulatedDiffuse * (1.0f / (float)lightSamples);
-    Vec3 finalSpecular = accumulatedSpecular * (1.0f / (float)lightSamples);
+    float invLightSamples = (1.0f / (float)lightSamples);
+    Vec3 finalDiffuse = accumulatedDiffuse * invLightSamples;
+    Vec3 finalSpecular = accumulatedSpecular * invLightSamples;
 
     return ((finalAmbient + finalDiffuse) * object.material.colour) + finalSpecular;
 }
@@ -598,7 +603,7 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
     int pixelIndex = (writeRow * screenWidth + pixelX);
     curandState rng = rngStates[pixelIndex];
 
-    const int samplesPerPixel = 64; //  from 64 for faster convergence
+    const int samplesPerPixel = 1; //  from 64 for faster convergence
 
     Vec3 postSampleColour = {0.0f, 0.0f, 0.0f};
 
