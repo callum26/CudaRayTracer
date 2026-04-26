@@ -2,290 +2,32 @@
 #include <cmath>
 #include <curand_kernel.h>
 #include "raytracer.h"
+#include "structs.h"
+#include "bvh.cuh"
 
 const unsigned int screenWidth = 800;
 const unsigned int screenHeight = 800;
 
 // device pixels declared frist point to empty memory additionressi in gpu
 static uchar4 *devicePixels = nullptr;
-
-// stores a 3D vector with coords xyz
-// vital part of the whole program
-struct Vec3
-{
-    float x, y, z;
-
-    // calculations for commonly needed vector maths
-    // otherVec3 passed in via reference to prevent not needed copies
-    // const so it doesnt get changed while calcs r running
-    // trailing const to not modifiy obj called
-    __device__ Vec3 subtract(const Vec3 &otherVec3) const
-    {
-        return {x - otherVec3.x, y - otherVec3.y, z - otherVec3.z};
-    }
-
-    __device__ Vec3 addition(const Vec3 &otherVec3) const
-    {
-        return {x + otherVec3.x, y + otherVec3.y, z + otherVec3.z};
-    }
-
-    __device__ Vec3 divide(const Vec3 &otherVec3) const
-    {
-        return {x / otherVec3.x, y / otherVec3.y, z / otherVec3.z};
-    }
-
-    __device__ Vec3 multiply(const Vec3 &otherVec3) const
-    {
-        return {x * otherVec3.x, y * otherVec3.y, z * otherVec3.z};
-    }
-
-    // more complex vector maths
-
-    // a dotProduct b = a.x * b.x + a.y * b.y + a.z * b.z
-    __device__ float dotProduct(const Vec3 &otherVec3) const
-    {
-        return (x * otherVec3.x) + (y * otherVec3.y) + (z * otherVec3.z);
-    }
-
-    // a(vector) * b(scalar) = a.x * b, a.y * b, a.z * b
-    __device__ Vec3 scale(float scalar) const
-    {
-        return {x * scalar, y * scalar, z * scalar};
-    }
-
-    // normalise = u / magnitude of (u)
-
-    // magnitude equation is given as = sqrt(x^2 + y^2 + z^2)
-    // this takes all xyz components of vec3 passed in
-    // dots them with themself return mag as result
-    __device__ float magnitude() const
-    {
-        return sqrtf(dotProduct(*this));
-    }
-
-    // normalinng making vector have a magnitude of 1 (unit vector) (for not 0 vectors) therefore its components r direction only
-    // direction is needed a lot regardless of magnitude so its better to normalise them then use for calculations
-    __device__ Vec3 normalise() const
-    {
-        float mag = magnitude();
-        if (mag != 0)
-        {
-            return {x / mag, y / mag, z / mag};
-        }
-        return {0.0f, 0.0f, 0.0f};
-    }
-
-    /*EXPLAIN THIS LATER*/
-    __device__ Vec3 cross(const Vec3 &otherVec3) const
-    {
-        return {
-            y * otherVec3.z - z * otherVec3.y,
-            z * otherVec3.x - x * otherVec3.z,
-            x * otherVec3.y - y * otherVec3.x};
-    }
-};
-
-// stores lighting properties of material
-struct Material
-{
-    Vec3 colour;
-    // ka, kd, ks
-    float ambientReflectivity, diffuseReflectivity, specularReflectivity;
-    // a
-    float shininess;
-
-    // for glass maybe water etc
-    float transparency;
-    float refraction; // how much it bends light
-};
-
-struct Light
-{
-    Vec3 position;
-    // ia, imd, ims
-    Vec3 ambientIntensity;
-    Vec3 diffuseIntensity;
-    Vec3 specularIntensity;
-    float lightIntensity;
-    float lightRadius;
-};
-
-// read about online find the source i think it was a yt video
-// seperating objects into types
-enum ObjectType
-{
-    sphereObject,
-    triangleObject
-};
-
-/* CHANGE RADIUS AND NORMAL SO ITS SEPERATE MAYBE SPLIT OBJECT INTO SPHERE GROUND STRUCTS idk*/
-struct Object
-{
-    Vec3 position;
-    Material material;
-    ObjectType type;
-
-    float radius;
-    Vec3 normal;
-    Vec3 v0, v1, v2;
-};
-
-struct Ray
-{
-    Vec3 origin;
-    Vec3 direction;
-    Vec3 hitPoint;
-};
-
-// starting BVH to optimise calculations
-// to start we need to create a bounding box struct for our object
-// commonly used is a axis aligned bounding box or AABB
-// a 3D box containing the object where edges are locked to axes and not roated
-// cube so we only need min axes and max
-struct AABB
-{
-    Vec3 boxMin, boxMax;
-};
-
-// as a BVH is a tree structure we need a tree structure :)
-// node doesnt
-struct BVHNode
-{
-    // contains our bounding box
-    AABB box;
-    // and its index within the tree (for our nodes)
-    int leftIndex;
-    int rightIndex;
-    // we also need to store where the object array starts in a seprate arry
-    int firstObject;
-    // and how many object there are within the leaf node
-    int objectCount;
-};
-
-// also we need a seperate struct to store object index refferencing its bounds and centroid
-// a centroid is basically the centre of mass of given object
-// we need the centre of the bounding box quite simple
-struct BuildObject
-{
-    AABB bounds;
-    Vec3 centroid;
-    int objectIndex;
-};
+// for rng values like angles rays bounce in
+static curandState *deviceRngStates = nullptr;
+// accumulation of frames
+static int currentFrame = 0;
+// accum buffer
+static Vec3 *deviceAccumulation = nullptr;
 
 // consts for gpu prevents recopying
 /* MAYBE BETTER WAY TO DO THIS?*/
 __constant__ Light light;
-__constant__ Object objects[20];
+__constant__ Object objects[64];
 __constant__ int objectCount;
 
-__device__ Vec3 centroidAABB(const AABB &box)
-{
-    return {
-        0.5f * (box.boxMin.x + box.boxMax.x),
-        0.5f * (box.boxMin.y + box.boxMax.y),
-        0.5f * (box.boxMin.z + box.boxMax.z)};
-}
-
-// now we need to create bounds of each type of object
-// only two for now
-/* COULD DEFINE SPHERE OUT OF TRIANGLE WOULD BE VERY COMPLEX BUT WOULD REMOVE A LOT OF REDUNNAT CKDE BUT MAY BE OUT OF SCOPE OF THIS PROJECT  */
-__device__ AABB boundsOf(const Object &object)
-{
-    AABB box;
-    if (object.type == sphereObject)
-    {
-        // we can use radius of sphere to calc the bounding box
-        Vec3 radius = {object.radius, object.radius, object.radius};
-        // object.pos is centre of object so subtracting or adding of the radius is gonna give the edges
-        // around the sphere, which is the bounding box coords
-        box.boxMin = object.position.subtract(radius);
-        box.boxMax = object.position.addition(radius);
-
-        // for triangle
-    }
-    else
-    {
-        // taking the minimum of each verticies for every coord
-        box.boxMin = {
-            fminf(object.v0.x, fminf(object.v1.x, object.v2.x)),
-            fminf(object.v0.y, fminf(object.v1.y, object.v2.y)),
-            fminf(object.v0.z, fminf(object.v1.z, object.v2.z))};
-        // taking the max of each verticies for every coord
-        box.boxMax = {
-            fmaxf(object.v0.x, fmaxf(object.v1.x, object.v2.x)),
-            fmaxf(object.v0.y, fmaxf(object.v1.y, object.v2.y)),
-            fmaxf(object.v0.z, fmaxf(object.v1.z, object.v2.z))};
-        return box;
-    }
-}
-
-__device__ float getComponent(const Vec3 &vector, int axisIndex)
-{
-    switch (axisIndex)
-    {
-    case 0:
-        return vector.x;
-    case 1:
-        return vector.y;
-    case 2:
-        return vector.z;
-    }
-}
-
-__device__ bool hitAABB(const Ray &ray, const AABB &box)
-{
-    AABB boxHit;
-    Ray boxRay;
-    // simialr to our ray intersection we need to find
-    // the ray distance min and max to find where we should focus the intersection on
-    // if ray is outside of these ranges it hasnt hit the box
-    float rayMinDistance = 0.001f;
-    float rayMaxDistance = INFINITY;
-
-    // as we know
-    // R = O + tD
-    // same with other interesctions if we assume a point P to be our ray equation
-    // P = O + tD
-    // sub in the min and max point for our AABB we calc
-    // P(min) = O + tD
-    // P(max) = O + tD
-    // but unlike sphere intersection test we know what points we are calculating
-    // we need to rearrange to find for t(min) and t(max)
-    // t(min) = (P - O) / D
-    // t(max) = (P - O) / D
-    // each xyz is calculated respective of one another so we repeat the equation 3 times
-    // so need to loop through each axes
-
-    for (int i = 0; i < 3; i++)
-    {
-        // get all components need for each
-        float rayOrigin = getComponent(boxRay.origin, i);
-        float rayDirection = getComponent(boxRay.direction, i);
-        float boxMin = getComponent(boxHit.boxMin, i);
-        float boxMax = getComponent(boxHit.boxMax, i);
-
-        // classic bcos we r diving more than once store it
-        float inverseDirection = 1.0f / rayDirection;
-        float rayNearHit = (boxMin - rayOrigin) * inverseDirection;
-        float rayFarHit = (boxMax - rayOrigin) * inverseDirection;
-
-        // if direction is negative we need to swap the near and far as they will be inversed
-        // ensuring near is always the smallest and far is always largest
-        if (inverseDirection < 0.0f)
-        {
-            float temp = rayNearHit;
-            rayNearHit = rayFarHit;
-            rayFarHit = temp;
-        }
-
-        // clamp them to our bounds at the top of the func
-        rayMinDistance = fmaxf(rayMinDistance, rayNearHit);
-        rayMaxDistance = fminf(rayMaxDistance, rayFarHit);
-    }
-    if (rayMaxDistance < rayMinDistance)
-        return false; // if min exceeds max then it must no longe be in box
-    return true;
-}
+// bvh constants maybe i can do this better i cant think of a better way rn
+__constant__ BVHNode bvhNodes[256];
+__constant__ int bvhRootIndex;
+__constant__ int bvhNodeCount;
+__constant__ int bvhObjects[64];
 
 // from my reading on https://www.scratchapixel.com/lessons/3d-basic-rendering/minimal-ray-tracer-rendering-simple-shapes/ray-sphere-intersection
 // ray defoed as ray(t) = Origin + t * Direction
@@ -316,7 +58,7 @@ __device__ bool rayIntersect(const Ray &ray, const Object &object, float &distan
         // in doc they refer to it as L = O - C
 
         // L = ray.origin - object.position
-        Vec3 sphereToOrigin = ray.origin.subtract(object.position);
+        Vec3 sphereToOrigin = ray.origin - object.position;
 
         // subsitute into equation
         // (L + tD) . (L + tD) = r^2
@@ -341,16 +83,16 @@ __device__ bool rayIntersect(const Ray &ray, const Object &object, float &distan
 
         // a = D . D
         // dot ray direction with itself
-        float a = ray.direction.dotProduct(ray.direction);
+        float a = ray.direction.dot(ray.direction);
 
         // b = L . D
         // dot sphereToOrigin with ray.direction
         // multiplypy b by 2 explained below
-        float b = 2.0f * sphereToOrigin.dotProduct(ray.direction);
+        float b = 2.0f * sphereToOrigin.dot(ray.direction);
 
         // c = L . L - r^2
         // dot sphereToOrigin with itself subtract sphere radius sphere to make sure its equal to zero explained below
-        float c = sphereToOrigin.dotProduct(sphereToOrigin) - (object.radius * object.radius);
+        float c = sphereToOrigin.dot(sphereToOrigin) - (object.radius * object.radius);
 
         // x = (-b (+/-) sqr(b^2 - 4ac)) / 2a
 
@@ -515,15 +257,15 @@ __device__ bool rayIntersect(const Ray &ray, const Object &object, float &distan
     else if (object.type == triangleObject)
     {
         // both edges of the triangle
-        Vec3 edge1 = object.v1.subtract(object.v0);
-        Vec3 edge2 = object.v2.subtract(object.v0);
+        Vec3 edge1 = object.v1 - object.v0;
+        Vec3 edge2 = object.v2 - object.v0;
 
-        Vec3 T = ray.origin.subtract(object.v0);
+        Vec3 T = ray.origin - object.v0;
         /* COME UP WITH BETTER VAR NAMES LATER*/
         Vec3 P = ray.direction.cross(edge2);
         Vec3 Q = T.cross(edge1);
 
-        float baseDet = P.dotProduct(edge1);
+        float baseDet = P.dot(edge1);
 
         // just like ground if parallel no bother or near zero
         if (fabsf(baseDet) < 0.0001f)
@@ -531,9 +273,9 @@ __device__ bool rayIntersect(const Ray &ray, const Object &object, float &distan
             return false;
         }
 
-        float t = Q.dotProduct(edge2) / baseDet;
-        float u = P.dotProduct(T) / baseDet;
-        float v = Q.dotProduct(ray.direction) / baseDet;
+        float t = Q.dot(edge2) / baseDet;
+        float u = P.dot(T) / baseDet;
+        float v = Q.dot(ray.direction) / baseDet;
 
         // also coords u, v must be between 0 and 1
         // and also must add between 0 and 1 so we check
@@ -555,6 +297,92 @@ __device__ bool rayIntersect(const Ray &ray, const Object &object, float &distan
     }
 }
 
+// searchs through the BVH to find which object ray hits
+__device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex)
+{
+    // we will use a depth first search to travese the tree
+    // stack to store which nodes visted
+    int stack[32];
+    int stackPtr = 0;
+    // pinc to store current node on stack
+    stack[stackPtr++] = bvhRootIndex;
+
+    // nearest hit found none rn
+    float closest = INFINITY;
+    int closestIdx = -1; // wich obj clostest
+
+    // keep going till stack empty
+    while (stackPtr > 0)
+    {
+        // pop node from stack pdec then get value
+        int nodeIdx = stack[--stackPtr];
+
+        // only continue if check bounds node not negative or past node count
+        if (nodeIdx < 0 || nodeIdx >= bvhNodeCount)
+            continue;
+
+        // fetch node from array bvhNodes using current node index
+        BVHNode node = bvhNodes[nodeIdx];
+
+        // do ray test if no intersection then we can skip all objs inside
+        if (!hitAABB(ray, node.box))
+            continue;
+
+        // if more than 0 objs in node
+        if (node.objectCount > 0)
+        {
+            // runs through all objs in leaf
+            for (int i = 0; i < node.objectCount; i++)
+            {
+                // gets object index from list of all bvhObjects
+                // the way it works
+                // e.g. leaf node contains 3 objs so node.objectCount = 3
+                // node.firstObject is the pos in bvhObjects where the objs within this specific node are stored
+                // lets say  node.firstObject = 4
+                // bcos there are 3 objs this leaf needs pos 4,5,6 for all 3 objs within the bvhObjects array
+                // as it iterates through the object count in our case 0,1,2
+                // node.firstObject is added with each of our i
+                // giving the ids of 4,5,6 which is what we need
+                int objIdx = bvhObjects[node.firstObject + i];
+
+                //  then do normal ray interset with each obj within the box
+                float dist = INFINITY;
+                if (rayIntersect(ray, objects[objIdx], dist))
+                {
+                    // but we are making sure we always keep the closest obj and its id
+                    if (dist < closest)
+                    {
+                        closest = dist;
+                        closestIdx = objIdx;
+                    }
+                }
+            }
+        }
+        // push children
+        else // not leaf node it has up to two children
+        {
+            // LIFO so do right child first pushed first popped last
+            // if righ child push rightIndex onto stack
+            if (node.rightIndex >= 0)
+                stack[stackPtr++] = node.rightIndex;
+            // if left child push leftIndex onto stack
+            if (node.leftIndex >= 0)
+                stack[stackPtr++] = node.leftIndex;
+        }
+    }
+
+    // as long as we have found at least on hit
+    if (closestIdx >= 0)
+    {
+        // copy results reporting sucess
+        distance = closest;
+        objectIndex = closestIdx;
+        return true;
+    }
+    // ifnot no obj hit
+    return false;
+}
+
 // surfaceNormal - normalised direction vector of a vector perpendicular to surface on that point
 __device__ Vec3 calcSurfaceNormal(const Ray &ray, const Object &object)
 {
@@ -566,13 +394,13 @@ __device__ Vec3 calcSurfaceNormal(const Ray &ray, const Object &object)
     if (object.type == sphereObject)
     {
         // normalising getting direction vector
-        surfaceNormal = ray.hitPoint.subtract(object.position).normalise();
+        surfaceNormal = (ray.hitPoint - object.position).normalise();
     }
     else if (object.type == triangleObject)
     {
         // cross product of E2 X E1 to get the normal
-        Vec3 edge1 = object.v1.subtract(object.v0);
-        Vec3 edge2 = object.v2.subtract(object.v0);
+        Vec3 edge1 = object.v1 - object.v0;
+        Vec3 edge2 = object.v2 - object.v0;
         surfaceNormal = edge2.cross(edge1).normalise();
     }
     else
@@ -587,7 +415,7 @@ __device__ bool isInside(const Ray &ray, const Vec3 normal)
 {
     // if dot product greater than 0 ray and normal are pointing in same rough direction
     // meaning ray is inside
-    return ray.direction.dotProduct(normal) > 0.0f;
+    return ray.direction.dot(normal) > 0.0f;
 }
 
 // must be executed on the set of all light soruces
@@ -604,79 +432,29 @@ __device__ bool isInside(const Ray &ray, const Vec3 normal)
 // S = ks * (Rm . V)^a * im,s
 // Ip = A + Sum (of all light soruces)(D + S)
 
-__device__ Vec3 calculateAmbient(const Light &light, const Object &object)
+__device__ void calcLighting(const Ray &ray, const Light &light, float distanceToObject, const Object &object, Vec3 surfaceNormal, Vec3 &diffuse, Vec3 &specular)
 {
-    Vec3 ambientStrength = light.ambientIntensity.scale(object.material.ambientReflectivity);
-    return ambientStrength;
-}
+    if (isInside(ray, surfaceNormal))
+    {
+        surfaceNormal = surfaceNormal * -1.0f;
+    }
 
-__device__ Vec3 calculateDiffuse(const Ray &ray, const Light &light, float distanceToObject, const Object &object)
-{
-    // D = kd * (Lm . N)* im,d
-    Vec3 surfaceNormal = calcSurfaceNormal(ray, object);
-    Vec3 lightToHit = light.position.subtract(ray.hitPoint);
+    Vec3 lightToHit = light.position - ray.hitPoint;
     float lightDistance = lightToHit.magnitude();
     Vec3 lightDirection = lightToHit.normalise();
 
-    if (isInside(ray, surfaceNormal))
-    {
-        surfaceNormal = surfaceNormal.scale(-1.0f);
-    }
-
-    // inverse square law light decreases inverse squared
-    // clamping prevents div by 0 or near zero
     float lightScaling = 1.0f / fmaxf(0.01f, (lightDistance * lightDistance));
-    // (Lm. N) is calc in calcLightDirectiondotProductSurfaceNormal
-    // clamp any negative values are 0 bcos they woukd facing qwaay from light hence no lit
-    float diffuseFactor = __saturatef(lightDirection.dotProduct(surfaceNormal));
+    float lightDotNormal = __saturatef(lightDirection.dot(surfaceNormal));
 
-    // im,d represents light scatter in all dirs when a light source hits suface this must be done for all light source
-    Vec3 imd = light.diffuseIntensity.scale(light.lightIntensity * lightScaling);
+    Vec3 reflectDir = (surfaceNormal * (2.0f * lightDotNormal)) - lightDirection;
 
-    // we can now cal D
-    // D = kd * (Lm . N) * im,d
-    Vec3 diffuseStrength = imd.scale(object.material.diffuseReflectivity * diffuseFactor);
+    Vec3 originToHit = (ray.origin - ray.hitPoint).normalise();
 
-    return diffuseStrength;
-}
+    float reflectdotOriginToHit = reflectDir.dot(originToHit);
+    reflectdotOriginToHit = __saturatef(reflectdotOriginToHit);
 
-__device__ Vec3 calculateSpecular(const Ray &ray, const Light &light, float distanceToObject, const Object &object)
-{
-    // S = ks * (Rm . V)^a * im,s
-
-    // incident vector reflection from is
-    // R = 2 * (L . N) * N - L
-
-    // we can use our calc funcs to work out all the required elements
-
-    // R = N * 2 * (L . N) - L
-    Vec3 surfaceNormal = calcSurfaceNormal(ray, object);
-    Vec3 lightToHit = light.position.subtract(ray.hitPoint);
-    float lightDistance = lightToHit.magnitude();
-    Vec3 lightDirection = lightToHit.normalise();
-
-    if (isInside(ray, surfaceNormal))
-    {
-        surfaceNormal = surfaceNormal.scale(-1.0f);
-    }
-
-    float lightDotNormal = __saturatef(lightDirection.dotProduct(surfaceNormal));
-    Vec3 reflectDir = surfaceNormal.scale(2.0f * lightDotNormal).subtract(lightDirection);
-
-    // originToHit - V direction vector pointing from hit point to origin
-    Vec3 originToHit = (ray.origin.subtract(ray.hitPoint)).normalise();
-
-    // Rm and V -> (Rm . V)
-    float reflectdotOriginToHit = reflectDir.dotProduct(originToHit);
-    reflectdotOriginToHit = __saturatef(reflectdotOriginToHit); // again like diffuse we clamp to 0
-
-    // im,s is intesity of light scatter in all directions when the light hits surface for specular reflection
-    Vec3 ims = light.specularIntensity.scale(light.lightIntensity);
-
-    // we can now cal S
-    // S = ks * (Rm . V)^a * im,s`
-    // S = im,s * ks * (Rm . V)^a
-    return ims.scale(object.material.specularReflectivity * powf(reflectdotOriginToHit, object.material.shininess));
+    diffuse = (light.diffuseIntensity * (light.lightIntensity * lightScaling)) * (object.material.diffuseReflectivity * lightDotNormal);
+    specular = (light.specularIntensity * (light.lightIntensity * lightScaling)) * (object.material.specularReflectivity * __powf(reflectdotOriginToHit, object.material.shininess));
 }
 
 // to calculate refraction snells law is used
@@ -692,12 +470,12 @@ __device__ Vec3 calculateRefraction(const Ray &ray, const Vec3 &surfaceNormal, c
     // to find we do the dot product of the ray direction to find the cosine angle
     // clamp cos 0-1 cosine angle
     // minus direction bcos we need the direction reversed so we can work out the angle incident
-    float incomingAngle = __saturatef(-ray.direction.dotProduct(surfaceNormal));
+    float incomingAngle = __saturatef(-ray.direction.dot(surfaceNormal));
     // in 3d space split it into horiz and vertic
     // we need the horizontal movement of the ray so we calcualte the ray parallel to te surface
     // multiplying the surface normal by the incoming angle gives an opposite vector
     // adding it to the ray cancels out any vertical movement without affecting the horizontal direction
-    Vec3 parallelRaySurface = (ray.direction.addition(surfaceNormal.scale(incomingAngle))).scale(refractionRatio);
+    Vec3 parallelRaySurface = (ray.direction + (surfaceNormal * incomingAngle)) * refractionRatio;
     // to calc the vertical componet we can use pythagoras theorm
     // a^2 + b^2 = c^2
     // final ray must have a magnitude of 1 hence c^2 must = 1
@@ -706,7 +484,7 @@ __device__ Vec3 calculateRefraction(const Ray &ray, const Vec3 &surfaceNormal, c
     // if we square this it leaves us with x^2 + y^2 + z^2 which is useful
     // bcos we can turn it to pythag equation
     /* PROBABLY BETTER WAY TO DO THIS BCOS MAGNITUDE IS SQTF THEN UNDOINIG WITH POWF SORT THAT OUT LATER*/
-    float parallelRayMagSq = parallelRaySurface.dotProduct(parallelRaySurface);
+    float parallelRayMagSq = parallelRaySurface.dot(parallelRaySurface);
     // we know c = 1 so
     // a^2 + b^2 = 1
     // a is our horiz movement we need b
@@ -716,26 +494,26 @@ __device__ Vec3 calculateRefraction(const Ray &ray, const Vec3 &surfaceNormal, c
     if (parallelRayMagSq > 1.0f)
     {
         // if over 1 normal refraction
-        return ray.direction.subtract(surfaceNormal.scale(ray.direction.dotProduct(surfaceNormal) * 2.0f));
+        return ray.direction - (surfaceNormal * (ray.direction.dot(surfaceNormal) * 2.0f));
     }
     float perpendicularRayMag = sqrtf(1.0f - parallelRayMagSq);
     // work backwords to find out the vector
     // flip the ray bcos the surface normal points opposite direction out of the surface instead inside
-    Vec3 perpendicularRaySurface = surfaceNormal.scale(-perpendicularRayMag);
+    Vec3 perpendicularRaySurface = surfaceNormal * (-perpendicularRayMag);
     // then add two components together to get the new vector
-    return parallelRaySurface.addition(perpendicularRaySurface);
+    return parallelRaySurface + perpendicularRaySurface;
 }
 
-__device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float objectDistance, int objectIndex, curandState *rng)
+/*ADD SPECULAR LIGHT TRANSPARENT OBJ SPECULAR I THINK SURELY?*/
+__device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float objectDistance, int objectIndex, curandState *rng, Vec3 surfaceNormal)
 {
     Ray shadeRay = ray;
-    shadeRay.hitPoint = shadeRay.origin.addition(shadeRay.direction.scale(objectDistance));
+    shadeRay.hitPoint = shadeRay.origin + (shadeRay.direction * objectDistance);
 
-    const int lightSamples = 8;
+    const int lightSamples = 4;
 
     float shadowOffset = 0.001f;
-    Vec3 shadowNormal = calcSurfaceNormal(shadeRay, object);
-    Vec3 shadowOrigin = shadeRay.hitPoint.addition(shadowNormal.scale(shadowOffset));
+    Vec3 shadowOrigin = shadeRay.hitPoint + (surfaceNormal * shadowOffset);
 
     Vec3 accumulatedDiffuse = {0.0f, 0.0f, 0.0f};
     Vec3 accumulatedSpecular = {0.0f, 0.0f, 0.0f};
@@ -750,52 +528,60 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
         float radius = sqrtf(curand_uniform(rng)) * light.lightRadius; // sqrt to spread out evenly
 
         // then as well we need a position
-        Vec3 lightSamplePos = light.position;
+        Vec3 sampleLightPosition = light.position;
         // direction given by angle
         // radius allows a pos to be determined allong the sample
-        lightSamplePos.x += cosf(angle) * radius; //
-        lightSamplePos.z += sinf(angle) * radius;
+        sampleLightPosition.x += cosf(angle) * radius; //
+        sampleLightPosition.z += sinf(angle) * radius;
 
         // sample as before now we get new lightpos
-        Vec3 shadowToLight = lightSamplePos.subtract(shadowOrigin);
+        Vec3 shadowToLight = sampleLightPosition - shadowOrigin;
         float shadowToLightDistance = shadowToLight.magnitude();
-        Vec3 shadowDirection = shadowToLight.normalise();
-
+        Vec3 shadowDirection = shadowToLight * (1.0f / shadowToLightDistance);
         Ray shadowRay = {shadowOrigin, shadowDirection, {0.0f, 0.0f, 0.0f}};
-        bool blocked = false;
 
-        // loop through all objects
-        for (int o = 0; o < objectCount; o++)
-        {
-            float shadowObjectDistance;
-            if (rayIntersect(shadowRay, objects[o], shadowObjectDistance))
-            {
-                if (shadowObjectDistance > shadowOffset && shadowObjectDistance < shadowToLightDistance && objects[o].material.transparency == 0.0f)
-                {
-                    blocked = true;
-                    break;
-                }
-            }
-        }
+        float shadowHitDistance = INFINITY;
+        int shadowHitObject = -1;
+
+        bool hitSomething = rayCastBVH(shadowRay, shadowHitDistance, shadowHitObject);
+
+        bool blocked = hitSomething &&
+                       (shadowHitDistance > 0.001f) &&
+                       (shadowHitDistance < shadowToLightDistance - 0.001f) &&
+                       (shadowHitObject != objectIndex);
         if (!blocked)
         {
-            Vec3 sampleDiffuse = calculateDiffuse(shadeRay, light, objectDistance, object);
-            Vec3 sampleSpecular = calculateSpecular(shadeRay, light, objectDistance, object);
+            Vec3 sampleDiffuse = {0.0f, 0.0f, 0.0f};
+            Vec3 sampleSpecular = {0.0f, 0.0f, 0.0f};
+            calcLighting(shadeRay, light, objectDistance, object, surfaceNormal, sampleDiffuse, sampleSpecular);
 
-            accumulatedDiffuse = accumulatedDiffuse.addition(sampleDiffuse);
-            accumulatedSpecular = accumulatedSpecular.addition(sampleSpecular);
+            accumulatedDiffuse = accumulatedDiffuse + sampleDiffuse;
+            accumulatedSpecular = accumulatedSpecular + sampleSpecular;
         }
     }
 
     // Ip = ka * ia + Sum (of all light soruces)(kd * (Lm . N)* im,d + ks * (Rm . V)^a * im,s))
-    Vec3 finalAmbient = calculateAmbient(light, object);
-    Vec3 finalDiffuse = accumulatedDiffuse.scale(1.0f / (float)lightSamples);
-    Vec3 finalSpecular = accumulatedSpecular.scale(1.0f / (float)lightSamples);
+    Vec3 finalAmbient = light.ambientIntensity * object.material.ambientReflectivity;
+    Vec3 finalDiffuse = accumulatedDiffuse * (1.0f / (float)lightSamples);
+    Vec3 finalSpecular = accumulatedSpecular * (1.0f / (float)lightSamples);
 
-    return ((finalAmbient.addition(finalDiffuse)).multiply(object.material.colour)).addition(finalSpecular);
+    return ((finalAmbient + finalDiffuse) * object.material.colour) + finalSpecular;
 }
 
-__global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
+__global__ void initRNGKernel(curandState *states, int width, int height)
+{
+    int pixelX = blockIdx.x * blockDim.x + threadIdx.x;
+    int pixelY = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (pixelX >= width || pixelY >= height)
+        return;
+
+    int pixelIndex = (pixelY * width + pixelX);
+
+    curand_init(1000, pixelIndex, 0, &states[pixelIndex]);
+}
+
+__global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accumulation, int frameIndex, int screenWidth, int screenHeight)
 {
     int pixelX = blockIdx.x * blockDim.x + threadIdx.x;
     int pixelY = blockIdx.y * blockDim.y + threadIdx.y;
@@ -810,11 +596,9 @@ __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
 
     int writeRow = (screenHeight - 1 - pixelY);
     int pixelIndex = (writeRow * screenWidth + pixelX);
+    curandState rng = rngStates[pixelIndex];
 
-    const int samplesPerPixel = 64;
-
-    curandState rng;
-    curand_init(1000, pixelIndex, 0, &rng);
+    const int samplesPerPixel = 64; //  from 64 for faster convergence
 
     Vec3 postSampleColour = {0.0f, 0.0f, 0.0f};
 
@@ -837,34 +621,14 @@ __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
         // every time ray bounces its strength is reduced
         Vec3 pixelColour = {0.0f, 0.0f, 0.0f};
         Vec3 strengthOfRay = {1.0f, 1.0f, 1.0f};
-        const int maxBounce = 4;
+        const int maxBounce = 4; // fewer
 
         for (int i = 0; i < maxBounce; i++)
         {
             float objectDistance = INFINITY;
             int objectIndex = -1;
 
-            AABB sceneBounds;
-            sceneBounds.boxMin = {-3.0f, -3.0f, -8.0f};
-            sceneBounds.boxMax = {3.0f, 3.0f, 1.0f};
-
-            if (!hitAABB(ray, sceneBounds))
-            {
-                break;
-            }
-
-            for (int o = 0; o < objectCount; o++)
-            {
-                float closestObjectDistance = INFINITY;
-                if (rayIntersect(ray, objects[o], closestObjectDistance))
-                {
-                    if (closestObjectDistance < objectDistance)
-                    {
-                        objectDistance = closestObjectDistance;
-                        objectIndex = o;
-                    }
-                }
-            }
+            rayCastBVH(ray, objectDistance, objectIndex);
 
             // they both also update their value for their respective distances whenever they run and return true
             if (objectIndex != -1)
@@ -872,15 +636,16 @@ __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
                 Object hitObject = objects[objectIndex];
                 // okay now we have to update each var depending on the results of the ray
                 // then we can calc the actual final value
-                Vec3 hitColour = postShadingColour(ray, hitObject, objectDistance, objectIndex, &rng);
+                Vec3 surfaceNormal = calcSurfaceNormal(ray, hitObject);
+                Vec3 hitColour = postShadingColour(ray, hitObject, objectDistance, objectIndex, &rng, surfaceNormal);
                 // as its recalling multiplyple addition next hit colour to previous multiplyplied by the current strenght
-                pixelColour = pixelColour.addition(hitColour.multiply(strengthOfRay));
+                pixelColour = pixelColour + (hitColour * strengthOfRay);
 
                 // update hitpoin surface normal ray dir making sure it runs shadeSphere with its new values
-                Vec3 hitPoint = ray.origin.addition(ray.direction.scale(objectDistance));
+                Vec3 hitPoint = ray.origin + (ray.direction * objectDistance);
                 ray.hitPoint = hitPoint;
 
-                Vec3 surfaceNormal = calcSurfaceNormal(ray, hitObject);
+                surfaceNormal = calcSurfaceNormal(ray, hitObject);
 
                 /*I THINK DO IT THIS WAY EITHER /IF TRASPENCRY/ MIGHT SLOW THINGS DOWN RATHER OR JUST COMPUTE EGARDLESS */
                 if (hitObject.material.transparency > 0.0f)
@@ -892,13 +657,13 @@ __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
                     if (checkInside)
                     {
                         refractionRatio = hitObject.material.refraction;
-                        surfaceNormal = surfaceNormal.scale(-1.0f);
+                        surfaceNormal = surfaceNormal * -1.0f;
                     }
                     else
                     {
                         refractionRatio = 1.0f / hitObject.material.refraction;
                     }
-                    cosTheta = __saturatef(-ray.direction.dotProduct(surfaceNormal));
+                    cosTheta = __saturatef(-ray.direction.dot(surfaceNormal));
                     // schlicks approximation fresnsel factor in specular reflection
                     // it is defined as
                     // R = R0 + (1-R0)(1-cos(theta))^5
@@ -910,7 +675,7 @@ __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
                     // like same as refraction incoming angle
                     // clamp to 0 preventing negative values as we r minisuing by 1
 
-                    float fresenelValue = R0 + (1.0f - R0) * powf(1.0f - cosTheta, 5.0f);
+                    float fresenelValue = R0 + (1.0f - R0) * __powf(1.0f - cosTheta, 5.0f);
                     fresenelValue = __saturatef(fresenelValue);
 
                     // asumming 50 50 chance ray reflects or refracts
@@ -925,37 +690,162 @@ __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
                         // I incident vector
                         // N = surfacenormal
                         // R = I - (N * (I. N) * 2)
-                        ray.origin = hitPoint.addition(surfaceNormal.scale(0.001f));
-                        ray.direction = ray.direction.subtract(surfaceNormal.scale((ray.direction.dotProduct(surfaceNormal)) * 2.0f)).normalise();
-                        strengthOfRay = strengthOfRay.scale(fresenelValue);
+                        ray.origin = hitPoint + (surfaceNormal * 0.001f);
+                        ray.direction = (ray.direction - (surfaceNormal * ((ray.direction.dot(surfaceNormal)) * 2.0f))).normalise();
+                        // applied material colour to reflect ray  color bleeding
+                        strengthOfRay = strengthOfRay * (hitObject.material.colour * fresenelValue);
                     }
                     else
                     { // refraction
                         Vec3 refractedDirection = calculateRefraction(ray, surfaceNormal, hitObject, refractionRatio).normalise();
                         // the dot between these two if be negative
                         // would mean the ray is continuuing inside
-                        if (refractedDirection.dotProduct(surfaceNormal) < 0.0f)
+                        if (refractedDirection.dot(surfaceNormal) < 0.0f)
                         {
-                            ray.origin = hitPoint.subtract(surfaceNormal.scale(0.001f));
+                            ray.origin = hitPoint - (surfaceNormal * 0.001f);
                         }
                         else
                         { // if pos then push away
-                            ray.origin = hitPoint.addition(surfaceNormal.scale(0.001f));
+                            ray.origin = hitPoint + (surfaceNormal * 0.001f);
                         }
 
                         ray.direction = refractedDirection;
-                        strengthOfRay = strengthOfRay.scale((1.0f - fresenelValue) * hitObject.material.transparency);
+                        strengthOfRay = strengthOfRay * ((1.0f - fresenelValue) * hitObject.material.transparency);
                     }
                 }
                 else
                 {
-                    // standard reflection only
-                    ray.origin = hitPoint.addition(surfaceNormal.scale(0.001f));
-                    ray.direction = ray.direction.subtract(surfaceNormal.scale((ray.direction.dotProduct(surfaceNormal)) * 2.0f)).normalise();
-                    strengthOfRay = strengthOfRay.scale(hitObject.material.specularReflectivity);
+                    // for opquae objects
+                    // standard pracise to use diffuse bounce cosine weighted hemisphere sampling
+                    // im going to use the example from https://www.pbr-book.org/4ed/Sampling_Algorithms/Sampling_Multidimensional_Functions
+                    // adjust ray oirigin like before
+                    ray.origin = hitPoint + (surfaceNormal * 0.001f);
+
+                    // in real life diffuse light would scatter randomly
+                    // could just multiply the random two directions like theta = R1 * PI and phi = R2 * 2PI
+                    // however this would sample uniformly accross every directions not realistic
+
+                    // in real life diffuse surfaces reflect more light towards the surface normal and less strongly parallel to surface
+                    // lambertian reflectance
+
+                    // in order for this to work we need to
+                    // convert uniform random numbers into directions
+                    // this is where we use a direction probability density function
+                    // where we use spherical coords as opposed to cartesian
+                    // (r, θ, phi)
+                    // r - distance from orign
+                    // θ - polar angle from vert axis
+                    // phi - azimuth angle roattion around vert axis
+
+                    // cartesian conversion
+                    // x = rsin(θ)cos(phi)
+                    // y = rsin(θ)sin(phi)
+                    // z = rcos(θ)
+                    // as a unit direction vector r = 1 so we can remove that
+
+                    // converting back to sphereical given (x,y,z)
+                    // distance from origin is gonna be mag of xyz
+                    // r = sqrt(x^2 + y^2 + z^2)
+
+                    // z = rcos(θ)
+                    // cos(θ) = z/r
+
+                    // θ = arccos(z/r)
+
+                    // we dont need to worry about z coords
+
+                    // phi direction around normal
+                    // theta how far away from normal
+
+                    // we also need the differential solid angle
+                    // wont go into this
+                    // d(w) = sinθ * dθ * d(phi)
+
+                    // paper defines directional PDF as p(w) = cos(θ) / pi
+                    // to get a 1D PDF with theta multiply by d(w)
+                    // integrate also removing the dθ from d(w) as we are integrating by θ
+                    // integral p(w) * sinθ * d(phi)
+                    // sub in p(w)
+                    // integral (cosθ / pi)sinθ d(phi)
+                    // pull out constants
+                    // (cosθsinθ / pi) integral d(phi)
+                    // integral d(phi) = 2pi
+                    // (cosθsinθ / pi) * 2pi
+                    // 2sinθcosθ
+                    // int from 0  to  theta
+                    // F(θ) = int(2sin(t)cos(t))dt
+                    // which is the cumulative distribution func
+                    // F(θ) = sin^2(θ)
+
+                    // for inverse transform sampling we set u, random bumber equal to F
+                    // u = sin^2(theta)
+                    // sin(theta) = u
+
+                    // phi = 2piR1 (uniform around circle)
+                    // θ = arccos(sqrt(1-R2))   (weighted towards normal)
+                    // where R1 and R2 and random floats
+
+                    // generate two random numbers
+                    float randNum1 = curand_uniform(&rng);
+                    float randNum2 = curand_uniform(&rng);
+
+                    // phi = 2piR1
+                    float phi = 2.0f * 3.14159265f * randNum1;
+
+                    // θ = arccos(sqrt(1-R2))
+                    // instead of using arccos as it is very expensive
+                    // cos(θ) = sqrt(1-R2)
+                    // cos^2(θ) = 1-R2
+
+                    // classic equation
+                    // sin(θ) = sqrt(1-cos^2(θ))
+                    // sin(θ) = sqrt(1-(1-R2))
+
+                    // sin(θ) = sqrt(R2)
+                    // same as our above sin(theta) = u
+                    float sinTheta = sqrtf(randNum2);
+                    // cos^2(θ) = 1-R2
+                    // cos(θ) = sqrt(1-R2)
+                    float cosTheta = sqrtf(1.0f - randNum2);
+
+                    // in this to represent each axis we create a
+                    // tangent for x axis
+                    // bitangent for y axis
+                    // surfacenormal for z
+
+                    // we need a vector that is not parallel to the surface normal
+                    // if the abs of x of surfacenormal is than than 0.99
+                    // that must mean the normal is not pointing in the x direction
+                    // otherwise if it is greater than it then we cant use x bcos they would be parallel so we use Y axis
+                    // we must do this later bcos we need the tangent of the surface normal
+                    // cross producting to get the tangent to the surface normal with identical same direction would equal 0
+                    Vec3 up = fabsf(surfaceNormal.x) < 0.99f
+                                  ? Vec3{1.0f, 0.0f, 0.0f}  // use x axis
+                                  : Vec3{0.0f, 1.0f, 0.0f}; // if not use y
+
+                    // tangent to the surface normal
+                    Vec3 tangent = up.cross(surfaceNormal).normalise();
+
+                    Vec3 bitangent = surfaceNormal.cross(tangent);
+
+                    // they define the bounce direction as
+                    // d = T . cos(phi)sinθ + B . sin(phi)sin(θ) + N . cos(θ)
+                    // each plus representing each xyz direction
+                    // x = T . cos(phi)sinθ
+                    // y = B . sin(phi)sin(θ)
+                    // z = N . cos(θ)
+                    // exactly the same as our cartesian conversion except now we are multipling by the following vectors
+                    // T - tangent vector
+                    // B - bitangent
+                    // N - surface normal
+
+                    // putting that all in we get
+                    ray.direction = (tangent * (cosf(phi) * sinTheta) + bitangent * (sinf(phi) * sinTheta) + surfaceNormal * cosTheta).normalise();
+
+                    strengthOfRay = strengthOfRay * hitObject.material.colour;
                 }
 
-                if ((strengthOfRay.x + strengthOfRay.y + strengthOfRay.z) < 0.003f)
+                if ((strengthOfRay.x + strengthOfRay.y + strengthOfRay.z) < 0.01f) // more aggressive culling
                 {
                     break;
                 }
@@ -964,48 +854,65 @@ __global__ void renderKernel(uchar4 *pixels, int screenWidth, int screenHeight)
             {
                 // no object hit fallback
                 Vec3 hitColour = {0.08f, 0.08f, 0.08f};
-                pixelColour = pixelColour.addition(hitColour.multiply(strengthOfRay));
+                pixelColour = pixelColour + (hitColour * strengthOfRay);
                 break;
             }
         }
-        postSampleColour = postSampleColour.addition(pixelColour);
+        postSampleColour = postSampleColour + pixelColour;
     }
 
     // change storing of pixel buffer to use the cuda uchar4
     // storing rgba values
-    Vec3 finalColour = postSampleColour.scale(1.0f / float(samplesPerPixel));
+    Vec3 processedColour = postSampleColour * (1.0f / float(samplesPerPixel));
 
-    // tone mapping gamma correction Reinhard
-    finalColour.x = finalColour.x / (finalColour.x + 1.0f);
-    finalColour.y = finalColour.y / (finalColour.y + 1.0f);
-    finalColour.z = finalColour.z / (finalColour.z + 1.0f);
+    int index = pixelIndex;
 
-    // birhgtens mid tones
-    finalColour.x = sqrtf(finalColour.x);
-    finalColour.y = sqrtf(finalColour.y);
-    finalColour.z = sqrtf(finalColour.z);
+    accumulation[index].x += processedColour.x;
+    accumulation[index].y += processedColour.y;
+    accumulation[index].z += processedColour.z;
 
-    unsigned char r = (unsigned char)(__saturatef(finalColour.x) * 255.0f);
-    unsigned char g = (unsigned char)(__saturatef(finalColour.y) * 255.0f);
-    unsigned char b = (unsigned char)(__saturatef(finalColour.z) * 255.0f);
+    float inverseFrame = 1.0f / (float)(frameIndex + 1);
+    float r = accumulation[index].x * inverseFrame;
+    float g = accumulation[index].y * inverseFrame;
+    float b = accumulation[index].z * inverseFrame;
 
-    pixels[pixelIndex] = make_uchar4(r, g, b, 255);
+    // ACES approximation https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
+    auto aces = [](float x)
+    {
+        float a = 2.51f, b = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;
+        return __saturatef((x * (a * x + b)) / (x * (c * x + d) + e));
+    };
+    const float exposure = 0.6f;
+    r = sqrtf(aces(r * exposure));
+    g = sqrtf(aces(g * exposure));
+    b = sqrtf(aces(b * exposure));
+
+    unsigned char finalR = (unsigned char)(__saturatef(r) * 255.0f);
+    unsigned char finalG = (unsigned char)(__saturatef(g) * 255.0f);
+    unsigned char finalB = (unsigned char)(__saturatef(b) * 255.0f);
+
+    rngStates[pixelIndex] = rng;
+    pixels[pixelIndex] = make_uchar4(finalR, finalG, finalB, 255);
 }
 
 // these functions now help avoid mem being allocated everyframe
 // mem init at the start before launchraytracer loop is executed with main.cpp
 // and cleared when it ends
-void initDevicePixel(int screenWidth, int screenHeight)
+void initDevicePixel(int w, int h)
 {
     // cuda malloc takes additionress of devicepixels storing the size needed as W * H * 4 as RGBA of each pixel
     // 4 removed as changed to uchar4 storage need size of it tho
-    cudaMalloc(&devicePixels, screenWidth * screenHeight * sizeof(uchar4));
+    cudaMalloc(&devicePixels, w * h * sizeof(uchar4));
+    cudaMalloc(&deviceAccumulation, w * h * sizeof(Vec3));
+    cudaMemset(deviceAccumulation, 0, w * h * sizeof(Vec3));
+    currentFrame = 0;
 }
 
 void freeDevicePixels()
 {
     // fres up the g
     cudaFree(devicePixels);
+    cudaFree(deviceAccumulation);
 }
 
 // additioned init scene to prevent reloading the scene
@@ -1019,11 +926,11 @@ void initScene()
         {0.35f, 0.35f, 0.32f}, // ambientIntensity
         {1.0f, 0.98f, 0.88f},  // diffuseIntensity
         {0.5f, 0.5f, 0.5f},    // specularIntensity
-        32.0f,                 // lightIntensity
+        20.0f,                 // lightIntensity
         0.55f                  // lightradiuys
     };
 
-    Object Hobjects[40];
+    Object Hobjects[64];
     int HobjectCount = 0;
 
     /*EXPLAIN THESE LATER TEST DATA*/
@@ -1151,6 +1058,38 @@ void initScene()
     Hobjects[HobjectCount].radius = 1.0f;
     HobjectCount++;
 
+    // build bvh
+    BuildObject buildObject[64];
+    for (int i = 0; i < HobjectCount; i++)
+    {
+        // fill in buildobject struct
+        buildObject[i].bounds = boundsOf(Hobjects[i]);
+        buildObject[i].centroid = centroidAABB(buildObject[i].bounds);
+        buildObject[i].objectIndex = i;
+    }
+
+    BVHNode HbvhNodes[256];
+    int HbvhObjects[64];
+    int HbvhNodeCount = 0;
+    int HbvhRootIndex = buildBVH(buildObject, 0, HobjectCount, HbvhNodes, HbvhNodeCount);
+
+    for (int i = 0; i < HobjectCount; i++)
+    {
+        HbvhObjects[i] = buildObject[i].objectIndex;
+    }
+
+    cudaMalloc(&deviceRngStates, screenWidth * screenHeight * sizeof(curandState));
+    dim3 block(16, 16);
+    dim3 grid(
+        (screenWidth + block.x - 1) / block.x,
+        (screenHeight + block.y - 1) / block.y);
+    initRNGKernel<<<grid, block>>>(deviceRngStates, screenWidth, screenHeight);
+
+    cudaMemcpyToSymbol(bvhNodes, HbvhNodes, sizeof(BVHNode) * HbvhNodeCount);
+    cudaMemcpyToSymbol(bvhObjects, HbvhObjects, sizeof(int) * HobjectCount);
+    cudaMemcpyToSymbol(bvhRootIndex, &HbvhRootIndex, sizeof(int));
+    cudaMemcpyToSymbol(bvhNodeCount, &HbvhNodeCount, sizeof(int));
+
     cudaMemcpyToSymbol(light, &Hlight, sizeof(Light));
     cudaMemcpyToSymbol(objects, &Hobjects, sizeof(Object) * HobjectCount);
     cudaMemcpyToSymbol(objectCount, &HobjectCount, sizeof(int));
@@ -1161,7 +1100,7 @@ float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight)
     // https://developer.nvidia.com/blog/how-implement-performance-metrics-cuda-cc/
     // as mentioned on the nvidia blog its better to use the inbuilt functions for timings in cuda instead of cpu itmings
     // the way on the blog is the best way to go about it
-
+    static int frameIndex = 0;
     // change to stop destroying events every frame
     static cudaEvent_t start, stop;
     static bool eventReady = false;
@@ -1178,8 +1117,10 @@ float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight)
 
     // begins once the kernel is launch
     cudaEventRecord(start);
-    renderKernel<<<gridSize, blockSize>>>(devicePixels, screenWidth, screenHeight);
+    renderKernel<<<gridSize, blockSize>>>(devicePixels, deviceRngStates, deviceAccumulation, frameIndex, screenWidth, screenHeight);
     cudaEventRecord(stop);
+
+    frameIndex++;
 
     cudaEventSynchronize(stop);
     cudaMemcpy(hostPixels, devicePixels, screenWidth * screenHeight * 4, cudaMemcpyDeviceToHost);
