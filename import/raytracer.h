@@ -9,5 +9,3 @@ void freeDevicePixels();
 void initScene();
 
 #endif
-
-#endif
