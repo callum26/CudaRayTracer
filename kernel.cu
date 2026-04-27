@@ -1,5 +1,6 @@
 #include <cuda_runtime.h>
 #include <cmath>
+#include <math_constants.h>
 #include <curand_kernel.h>
 #include "raytracer.h"
 #include "structs.h"
@@ -8,26 +9,27 @@
 const unsigned int screenWidth = 800;
 const unsigned int screenHeight = 800;
 
+// consts for gpu prevents recopying
+// no more array constas too expensive
+__constant__ Light light;
+__constant__ int objectCount;
+__constant__ int bvhRootIndex;
+__constant__ int bvhNodeCount;
+
 // device pixels declared frist point to empty memory additionressi in gpu
 static uchar4 *devicePixels = nullptr;
 // for rng values like angles rays bounce in
 static curandState *deviceRngStates = nullptr;
-// accumulation of frames
-static int currentFrame = 0;
 // accum buffer
 static Vec3 *deviceAccumulation = nullptr;
-
-// consts for gpu prevents recopying
-/* MAYBE BETTER WAY TO DO THIS?*/
-__constant__ Light light;
-__constant__ Object objects[64];
-__constant__ int objectCount;
-
-// bvh constants maybe i can do this better i cant think of a better way rn
-__constant__ BVHNode bvhNodes[256];
-__constant__ int bvhRootIndex;
-__constant__ int bvhNodeCount;
-__constant__ int bvhObjects[64];
+// using device pointers instead
+// for bvh obvs
+static BVHNode *deviceBvhNodes = nullptr;
+static int *deviceBvhObjects = nullptr;
+// for objs
+static Object *deviceObjects = nullptr;
+// cur frames
+static int currentFrame = 0;
 
 // from my reading on https://www.scratchapixel.com/lessons/3d-basic-rendering/minimal-ray-tracer-rendering-simple-shapes/ray-sphere-intersection
 // ray defoed as ray(t) = Origin + t * Direction
@@ -124,7 +126,7 @@ __device__ bool rayIntersect(const Ray &ray, const Object &object, float &distan
         {
             // (- b - sqrt(b^2-4ac)) / 2a for nearest intersection to the camera  enter spehere
             // (- b - sqrt(b^2-4ac)) / 2a for far intsect to cam  exit spehere
-            inv2A = 1.0f / (2.0f * a);
+            float inv2A = 1.0f / (2.0f * a);
             float closeIntersection = (-b - sqrtf(discriminant)) * inv2A;
             if (closeIntersection > 0.001f)
             {
@@ -275,9 +277,9 @@ __device__ bool rayIntersect(const Ray &ray, const Object &object, float &distan
         }
 
         // prevents dividing 3 trimes
-        float invDet = 1.0f / baseDet
+        float invDet = 1.0f / baseDet;
 
-                       float t = Q.dot(edge2) * invDet;
+        float t = Q.dot(edge2) * invDet;
         float u = P.dot(T) * invDet;
         float v = Q.dot(ray.direction) * invDet;
 
@@ -302,7 +304,7 @@ __device__ bool rayIntersect(const Ray &ray, const Object &object, float &distan
 }
 
 // searchs through the BVH to find which object ray hits
-__device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex)
+__device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BVHNode *bvhNodes, int *bvhObjects, Object *objects)
 {
     // we will use a depth first search to travese the tree
     // stack to store which nodes visted
@@ -509,7 +511,7 @@ __device__ Vec3 calculateRefraction(const Ray &ray, const Vec3 &surfaceNormal, c
 }
 
 /*ADD SPECULAR LIGHT TRANSPARENT OBJ SPECULAR I THINK SURELY?*/
-__device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float objectDistance, int objectIndex, curandState *rng, Vec3 surfaceNormal)
+__device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float objectDistance, int objectIndex, curandState *rng, Vec3 surfaceNormal, BVHNode *bvhNodes, int *bvhObjects, Object *objects)
 {
     Ray shadeRay = ray;
     shadeRay.hitPoint = shadeRay.origin + (shadeRay.direction * objectDistance);
@@ -528,7 +530,7 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
     {
         // we need a random angle as well as radius for the sample
         // full circle obvs 2pi
-        float angle = curand_uniform(rng) * 2.0f * 3.14159265f;        // mapping angle in radians 0 to 2pi can shoot in any direction
+        float angle = curand_uniform(rng) * 2.0f * CUDART_PI_F;        // mapping angle in radians 0 to 2pi can shoot in any direction
         float radius = sqrtf(curand_uniform(rng)) * light.lightRadius; // sqrt to spread out evenly
 
         // then as well we need a position
@@ -547,7 +549,7 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
         float shadowHitDistance = INFINITY;
         int shadowHitObject = -1;
 
-        bool hitSomething = rayCastBVH(shadowRay, shadowHitDistance, shadowHitObject);
+        bool hitSomething = rayCastBVH(shadowRay, shadowHitDistance, shadowHitObject, bvhNodes, bvhObjects, objects);
 
         bool blocked = hitSomething &&
                        (shadowHitDistance > 0.001f) &&
@@ -586,7 +588,7 @@ __global__ void initRNGKernel(curandState *states, int width, int height)
     curand_init(1000, pixelIndex, 0, &states[pixelIndex]);
 }
 
-__global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accumulation, int frameIndex, int screenWidth, int screenHeight)
+__global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accumulation, int frameIndex, int screenWidth, int screenHeight, BVHNode *bvhNodes, int *bvhObjects, Object *objects)
 {
     int pixelX = blockIdx.x * blockDim.x + threadIdx.x;
     int pixelY = blockIdx.y * blockDim.y + threadIdx.y;
@@ -626,24 +628,37 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
         // every time ray bounces its strength is reduced
         Vec3 pixelColour = {0.0f, 0.0f, 0.0f};
         Vec3 strengthOfRay = {1.0f, 1.0f, 1.0f};
-        const int maxBounce = 4; // fewer
+        const int maxBounce = 8;
+
+        // beers law tracking
+        int insideObjectIndex = -1; // -1 meansn air
+        Vec3 insideEntryPoint = {0.0f, 0.0f, 0.0f};
 
         for (int i = 0; i < maxBounce; i++)
         {
             float objectDistance = INFINITY;
             int objectIndex = -1;
 
-            rayCastBVH(ray, objectDistance, objectIndex);
+            rayCastBVH(ray, objectDistance, objectIndex, bvhNodes, bvhObjects, objects);
 
             // they both also update their value for their respective distances whenever they run and return true
             if (objectIndex != -1)
             {
                 Object hitObject = objects[objectIndex];
+
+                // check for light emmisve material
+                if (hitObject.material.emission.x > 0.0f || hitObject.material.emission.y > 0.0f || hitObject.material.emission.z > 0.0f)
+                {
+                    pixelColour = pixelColour + (hitObject.material.emission * strengthOfRay);
+                    break;
+                }
+
                 // okay now we have to update each var depending on the results of the ray
                 // then we can calc the actual final value
                 Vec3 surfaceNormal = calcSurfaceNormal(ray, hitObject);
-                Vec3 hitColour = postShadingColour(ray, hitObject, objectDistance, objectIndex, &rng, surfaceNormal);
-                // as its recalling multiplyple addition next hit colour to previous multiplyplied by the current strenght
+                Vec3 hitColour = (hitObject.material.transparency > 0.0f)
+                                     ? Vec3{0.0f, 0.0f, 0.0f}
+                                     : postShadingColour(ray, hitObject, objectDistance, objectIndex, &rng, surfaceNormal, bvhNodes, bvhObjects, objects); // if not trasparent shading calcs
                 pixelColour = pixelColour + (hitColour * strengthOfRay);
 
                 // update hitpoin surface normal ray dir making sure it runs shadeSphere with its new values
@@ -655,20 +670,37 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
                 /*I THINK DO IT THIS WAY EITHER /IF TRASPENCRY/ MIGHT SLOW THINGS DOWN RATHER OR JUST COMPUTE EGARDLESS */
                 if (hitObject.material.transparency > 0.0f)
                 {
-                    bool checkInside = isInside(ray, surfaceNormal);
+                    // beer lambert law as light travel through medium each wavelength is absored exponentially with distance
+                    // defined as
+                    // I = I0 x (e^(-a x d))
+                    // I is the new strength after absoprtion
+                    // I0 inital strength
+                    // a is abosorption coeff
+                    // d is distance travel through medium
+                    if (insideObjectIndex == objectIndex && objectDistance > 0.0f)
+                    {
+                        Vec3 absorption = hitObject.material.absorption;
+                        // expf returns e^x where x is ()
+                        strengthOfRay.x *= __expf(-absorption.x * objectDistance);
+                        strengthOfRay.y *= __expf(-absorption.y * objectDistance);
+                        strengthOfRay.z *= __expf(-absorption.z * objectDistance);
+                    }
 
-                    float refractionRatio;
-                    float cosTheta;
-                    if (checkInside)
-                    {
-                        refractionRatio = hitObject.material.refraction;
-                        surfaceNormal = surfaceNormal * -1.0f;
-                    }
-                    else
-                    {
-                        refractionRatio = 1.0f / hitObject.material.refraction;
-                    }
-                    cosTheta = __saturatef(-ray.direction.dot(surfaceNormal));
+                    Vec3 rawNormal = calcSurfaceNormal(ray, hitObject);
+                    // before was assuming that surface normal alaways points against rau direction
+                    bool inside = ray.direction.dot(rawNormal) > 0.0f;
+                    // now testing it against ray direction if true then inside
+
+                    // flips normal if inside
+                    Vec3 surfaceNormal = inside
+                                             ? rawNormal * -1.0f
+                                             : rawNormal;
+                    // also adjusts refraction ratio because its changes depending on exit / entrance
+                    float refractionRatio = inside
+                                                ? hitObject.material.refraction
+                                                : 1.0f / hitObject.material.refraction;
+
+                    float cosTheta = __saturatef(-ray.direction.dot(surfaceNormal));
                     // schlicks approximation fresnsel factor in specular reflection
                     // it is defined as
                     // R = R0 + (1-R0)(1-cos(theta))^5
@@ -698,7 +730,7 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
                         ray.origin = hitPoint + (surfaceNormal * 0.001f);
                         ray.direction = (ray.direction - (surfaceNormal * ((ray.direction.dot(surfaceNormal)) * 2.0f))).normalise();
                         // applied material colour to reflect ray  color bleeding
-                        strengthOfRay = strengthOfRay * (hitObject.material.colour * fresenelValue);
+                        strengthOfRay = strengthOfRay * fresenelValue;
                     }
                     else
                     { // refraction
@@ -715,7 +747,7 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
                         }
 
                         ray.direction = refractedDirection;
-                        strengthOfRay = strengthOfRay * ((1.0f - fresenelValue) * hitObject.material.transparency);
+                        strengthOfRay = strengthOfRay * (1.0f - fresenelValue);
                     }
                 }
                 else
@@ -795,7 +827,7 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
                     float randNum2 = curand_uniform(&rng);
 
                     // phi = 2piR1
-                    float phi = 2.0f * 3.14159265f * randNum1;
+                    float phi = 2.0f * CUDART_PI_F * randNum1;
 
                     // θ = arccos(sqrt(1-R2))
                     // instead of using arccos as it is very expensive
@@ -939,9 +971,9 @@ void initScene()
     int HobjectCount = 0;
 
     /*EXPLAIN THESE LATER TEST DATA*/
-    Material whiteWall = {{0.85f, 0.85f, 0.85f}, 0.35f, 0.75f, 0.00f, 5.0f, 0.0f, 1.0f};
-    Material redWall = {{0.75f, 0.10f, 0.10f}, 0.30f, 0.70f, 0.00f, 5.0f, 0.0f, 1.0f};
-    Material greenWall = {{0.10f, 0.65f, 0.10f}, 0.30f, 0.70f, 0.00f, 5.0f, 0.0f, 1.0f};
+    Material whiteWall = {{0.85f, 0.85f, 0.85f}, 0.35f, 0.75f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
+    Material redWall = {{0.75f, 0.10f, 0.10f}, 0.30f, 0.70f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
+    Material greenWall = {{0.10f, 0.65f, 0.10f}, 0.30f, 0.70f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
 
     // back wall
     Hobjects[HobjectCount].v0 = {-3.0f, -3.0f, -8.0f};
@@ -1037,30 +1069,53 @@ void initScene()
     Hobjects[HobjectCount].position = {-1.0f, -1.5f, -6.0f};
     Hobjects[HobjectCount].material = {
         {0.2f, 0.2f, 0.8f},
-        0.35f, // ambient
-        0.75f, // diffuse
-        0.05f, // specular
-        64.0f, // shininess
-        0.0f,  // transparency
-        1.0f   // refraction factor
+        0.35f,              // ambient
+        0.75f,              // diffuse
+        0.05f,              // specular
+        64.0f,              // shininess
+        0.0f,               // transparency
+        1.0f,               // refraction factor
+        {0.0f, 0.0f, 0.0f}, // absorption
+        {0.0f, 0.0f, 0.0f}  // emission
     };
     Hobjects[HobjectCount].type = sphereObject;
     Hobjects[HobjectCount].radius = 1.0f;
     HobjectCount++;
 
-    // sphejre
-    Hobjects[HobjectCount].position = {1.2f, -1.5f, -4.5f};
+    // sphejre glass
+    Hobjects[HobjectCount].position = {1.2f, -1.5f, -6.5f};
     Hobjects[HobjectCount].material = {
         {0.9f, 0.9f, 0.9f},
-        0.0f,  // ambient
-        0.0f,  // diffuse
-        0.05f, // specular
-        64.0f, // shininess
-        1.0f,  // transparency
-        1.5f   // refraction factor
+        0.0f,                // ambient
+        0.0f,                // diffuse
+        0.05f,               // specular
+        64.0f,               // shininess
+        1.0f,                // transparency
+        1.5f,                // refraction factor
+        {0.05f, 0.3f, 0.3f}, // absorption, green and blue
+        {0.0f, 0.0f, 0.0f}   // emission
     };
     Hobjects[HobjectCount].type = sphereObject;
     Hobjects[HobjectCount].radius = 1.0f;
+    HobjectCount++;
+
+    // light quad for light fixture
+    Material lightFixtureMaterial = {{1.0f, 1.0f, 1.0f}, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {15.0f, 15.0f, 14.0f}};
+
+    // tri1 just below light
+    Hobjects[HobjectCount].v0 = {-0.5f, 2.749f, -5.5f};
+    Hobjects[HobjectCount].v1 = {0.5f, 2.749f, -5.5f};
+    Hobjects[HobjectCount].v2 = {-0.5f, 2.749f, -4.5f};
+    Hobjects[HobjectCount].material = lightFixtureMaterial;
+    Hobjects[HobjectCount].type = triangleObject;
+    HobjectCount++;
+
+    // tri2
+    Hobjects[HobjectCount].v0 = {0.5f, 2.749f, -5.5f};
+    Hobjects[HobjectCount].v1 = {0.5f, 2.749f, -4.5f};
+    Hobjects[HobjectCount].v2 = {-0.5f, 2.749f, -4.5f};
+    Hobjects[HobjectCount].material = lightFixtureMaterial;
+    Hobjects[HobjectCount].type = triangleObject;
     HobjectCount++;
 
     // build bvh
@@ -1090,13 +1145,17 @@ void initScene()
         (screenHeight + block.y - 1) / block.y);
     initRNGKernel<<<grid, block>>>(deviceRngStates, screenWidth, screenHeight);
 
-    cudaMemcpyToSymbol(bvhNodes, HbvhNodes, sizeof(BVHNode) * HbvhNodeCount);
-    cudaMemcpyToSymbol(bvhObjects, HbvhObjects, sizeof(int) * HobjectCount);
+    cudaMalloc(&deviceBvhNodes, sizeof(BVHNode) * HbvhNodeCount);
+    cudaMalloc(&deviceBvhObjects, sizeof(int) * HobjectCount);
+    cudaMalloc(&deviceObjects, sizeof(Object) * HobjectCount);
+
+    cudaMemcpy(deviceBvhNodes, HbvhNodes, sizeof(BVHNode) * HbvhNodeCount, cudaMemcpyHostToDevice);
+    cudaMemcpy(deviceBvhObjects, HbvhObjects, sizeof(int) * HobjectCount, cudaMemcpyHostToDevice);
+    cudaMemcpy(deviceObjects, &Hobjects, sizeof(Object) * HobjectCount, cudaMemcpyHostToDevice);
+
     cudaMemcpyToSymbol(bvhRootIndex, &HbvhRootIndex, sizeof(int));
     cudaMemcpyToSymbol(bvhNodeCount, &HbvhNodeCount, sizeof(int));
-
     cudaMemcpyToSymbol(light, &Hlight, sizeof(Light));
-    cudaMemcpyToSymbol(objects, &Hobjects, sizeof(Object) * HobjectCount);
     cudaMemcpyToSymbol(objectCount, &HobjectCount, sizeof(int));
 }
 
@@ -1122,7 +1181,7 @@ float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight)
 
     // begins once the kernel is launch
     cudaEventRecord(start);
-    renderKernel<<<gridSize, blockSize>>>(devicePixels, deviceRngStates, deviceAccumulation, frameIndex, screenWidth, screenHeight);
+    renderKernel<<<gridSize, blockSize>>>(devicePixels, deviceRngStates, deviceAccumulation, frameIndex, screenWidth, screenHeight, deviceBvhNodes, deviceBvhObjects, deviceObjects);
     cudaEventRecord(stop);
 
     frameIndex++;

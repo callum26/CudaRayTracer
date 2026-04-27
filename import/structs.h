@@ -14,7 +14,7 @@ struct Vec3
         struct
         {
             float x, y, z;
-        };          // keep og xyz
+        }; // keep og xyz
         float v[3]; // then indexing
     };
 
@@ -99,6 +99,8 @@ struct Material
     // for glass maybe water etc
     float transparency;
     float refraction; // how much it bends light
+    Vec3 absorption;  // how much is absored by object when it travels through a medium
+    Vec3 emission;    // how much light this material emits
 };
 
 struct Light
