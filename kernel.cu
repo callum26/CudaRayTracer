@@ -37,112 +37,111 @@ static int currentFrame = 0;
 // Direction (ray.direction)
 // t = distance from point of intersection to origin of the ray
 // find value of t (if intersects) use it to find the point of intersect with spehere
-/* MIGHT SPLIT THIS BACK UP INTO TWO EQUATIONS USING IFS IS INEFFICIENT CREATES SLOW DOWNS*/
-__device__ bool rayIntersect(const Ray &ray, const Object &object, float &distance)
+__device__ bool rayIntersectSphere(const Ray &ray, const Object &object, float &distance)
 {
-    if (object.type == sphereObject)
+    // implicit equation of sphere w/ radius r centred at C = 0,0,0
+    // given by (x-x0)^2 + (y-y0)^2 + (z-z0)^2 = r^2
+    // must mean any point P must satisfy
+    // (P-C) . (P-C) = r^2
+    // we have C and r we need to calc P
+
+    // to find t (intersection to origin of the ray) we need to find its intersection (point P)
+    // if we subsitute our ray equation into point P we can work its intersection
+    // P = Origin + t * Direction lets saying P = O + tD
+    // putting it into our implicit equation of sphere
+    // (O + tD - C) . (O + tD - C) = r^2
+    // to reduce rearrange grouping togther vars we already have O and C and we also have r
+    // (O - C + tD) . (O - C + tD) = r^2
+    // O - C is the vector to get from sphere center to ray origin
+    // in doc they refer to it as L = O - C
+
+    // L = ray.origin - object.position
+    Vec3 sphereToOrigin = ray.origin - object.position;
+
+    // subsitute into equation
+    // (L + tD) . (L + tD) = r^2
+    // expand out
+    // L . (L + tD) + tD . (L + tD)
+    // (L . L) + (L . tD) + (tD . L) + (tD . tD)
+    // t (scalar) dot product distros seperately from vecotrs remove them out with no issue
+    // (L . L) + t(L . D) + t(D . L) + t^2(D . D)
+    // group identical factors
+    // = (L . L) + 2t(L . D) + t^2(D . D)
+    // rearranging in power order
+    // t^2(D . D) + 2t(L . D) + (L . L) = r^2
+    // assign all to our vars
+    // a = D . D
+    // b = L . D
+    // c = L . L
+    // subsitute in
+    // at^2 + 2bt + c = r^2
+    // exactly like quadratic equation ax^2 + bx + c = 0 we want it equal to 0 subtract only none t component c by r^2
+    // c = L . L - r^2
+    // at^2 + 2bt + c = 0
+
+    // a = D . D
+    // dot ray direction with itself
+    float a = ray.direction.dot(ray.direction);
+
+    // b = L . D
+    // dot sphereToOrigin with ray.direction
+    // multiplypy b by 2 explained below
+    float b = 2.0f * sphereToOrigin.dot(ray.direction);
+
+    // c = L . L - r^2
+    // dot sphereToOrigin with itself subtract sphere radius sphere to make sure its equal to zero explained below
+    float c = sphereToOrigin.dot(sphereToOrigin) - (object.radius * object.radius);
+
+    // x = (-b (+/-) sqr(b^2 - 4ac)) / 2a
+
+    // solving the discrimiant gives us the amount of solutions ignore complex solutions
+    // b^2 - 4ac > 0 two real solutions
+    // b^2 - 4ac = 0 one real solution
+
+    // either ray is intersecting twice at b^2 - 4ac > 0
+    // or intersecting once b^2 - 4ac = 0
+    // one intersection is less comon it would be arond clipping edges of sphere
+    // two intersection pass throughs spehere coming out another side
+
+    // discrim = b^2 - 4ac
+    // at^2 + 2bt + c = r^2
+    // quadratic equation ax^2 + bx + c = 0
+    // at^2 + 2bt + (c - r^2) = 0
+    // d = a
+    // e = 2b
+    // f = (c - r^2)
+    // dt^2 + et + f = 0
+    // now in quadratic form
+
+    // solve for the discriminant
+    // b^2 - 4 * a * c
+    float discriminant = b * b - (4.0f * a * c);
+
+    // mentioned above check for only real solutions either discrim is greater than 0 or exactly 0
+    if (discriminant >= 0)
     {
-
-        // implicit equation of sphere w/ radius r centred at C = 0,0,0
-        // given by (x-x0)^2 + (y-y0)^2 + (z-z0)^2 = r^2
-        // must mean any point P must satisfy
-        // (P-C) . (P-C) = r^2
-        // we have C and r we need to calc P
-
-        // to find t (intersection to origin of the ray) we need to find its intersection (point P)
-        // if we subsitute our ray equation into point P we can work its intersection
-        // P = Origin + t * Direction lets saying P = O + tD
-        // putting it into our implicit equation of sphere
-        // (O + tD - C) . (O + tD - C) = r^2
-        // to reduce rearrange grouping togther vars we already have O and C and we also have r
-        // (O - C + tD) . (O - C + tD) = r^2
-        // O - C is the vector to get from sphere center to ray origin
-        // in doc they refer to it as L = O - C
-
-        // L = ray.origin - object.position
-        Vec3 sphereToOrigin = ray.origin - object.position;
-
-        // subsitute into equation
-        // (L + tD) . (L + tD) = r^2
-        // expand out
-        // L . (L + tD) + tD . (L + tD)
-        // (L . L) + (L . tD) + (tD . L) + (tD . tD)
-        // t (scalar) dot product distros seperately from vecotrs remove them out with no issue
-        // (L . L) + t(L . D) + t(D . L) + t^2(D . D)
-        // group identical factors
-        // = (L . L) + 2t(L . D) + t^2(D . D)
-        // rearranging in power order
-        // t^2(D . D) + 2t(L . D) + (L . L) = r^2
-        // assign all to our vars
-        // a = D . D
-        // b = L . D
-        // c = L . L
-        // subsitute in
-        // at^2 + 2bt + c = r^2
-        // exactly like quadratic equation ax^2 + bx + c = 0 we want it equal to 0 subtract only none t component c by r^2
-        // c = L . L - r^2
-        // at^2 + 2bt + c = 0
-
-        // a = D . D
-        // dot ray direction with itself
-        float a = ray.direction.dot(ray.direction);
-
-        // b = L . D
-        // dot sphereToOrigin with ray.direction
-        // multiplypy b by 2 explained below
-        float b = 2.0f * sphereToOrigin.dot(ray.direction);
-
-        // c = L . L - r^2
-        // dot sphereToOrigin with itself subtract sphere radius sphere to make sure its equal to zero explained below
-        float c = sphereToOrigin.dot(sphereToOrigin) - (object.radius * object.radius);
-
-        // x = (-b (+/-) sqr(b^2 - 4ac)) / 2a
-
-        // solving the discrimiant gives us the amount of solutions ignore complex solutions
-        // b^2 - 4ac > 0 two real solutions
-        // b^2 - 4ac = 0 one real solution
-
-        // either ray is intersecting twice at b^2 - 4ac > 0
-        // or intersecting once b^2 - 4ac = 0
-        // one intersection is less comon it would be arond clipping edges of sphere
-        // two intersection pass throughs spehere coming out another side
-
-        // discrim = b^2 - 4ac
-        // at^2 + 2bt + c = r^2
-        // quadratic equation ax^2 + bx + c = 0
-        // at^2 + 2bt + (c - r^2) = 0
-        // d = a
-        // e = 2b
-        // f = (c - r^2)
-        // dt^2 + et + f = 0
-        // now in quadratic form
-
-        // solve for the discriminant
-        // b^2 - 4 * a * c
-        float discriminant = b * b - (4.0f * a * c);
-
-        // mentioned above check for only real solutions either discrim is greater than 0 or exactly 0
-        if (discriminant >= 0)
+        // (- b - sqrt(b^2-4ac)) / 2a for nearest intersection to the camera  enter spehere
+        // (- b - sqrt(b^2-4ac)) / 2a for far intsect to cam  exit spehere
+        float inv2A = 1.0f / (2.0f * a);
+        float closeIntersection = (-b - sqrtf(discriminant)) * inv2A;
+        if (closeIntersection > 0.01f)
         {
-            // (- b - sqrt(b^2-4ac)) / 2a for nearest intersection to the camera  enter spehere
-            // (- b - sqrt(b^2-4ac)) / 2a for far intsect to cam  exit spehere
-            float inv2A = 1.0f / (2.0f * a);
-            float closeIntersection = (-b - sqrtf(discriminant)) * inv2A;
-            if (closeIntersection > 0.01f)
-            {
-                distance = closeIntersection;
-                return true;
-            }
-
-            float farIntersection = (-b + sqrtf(discriminant)) * inv2A;
-            if (farIntersection > 0.01f)
-            {
-                distance = farIntersection;
-                return true;
-            }
+            distance = closeIntersection;
+            return true;
         }
-        return false;
+
+        float farIntersection = (-b + sqrtf(discriminant)) * inv2A;
+        if (farIntersection > 0.01f)
+        {
+            distance = farIntersection;
+            return true;
+        }
     }
+    return false;
+}
+
+__device__ bool rayIntersectTriangle(const Ray &ray, const Object &object, float &distance)
+{
     // using Moller Trumbore triangle intersection
     // https://cadxfem.org/inf/Fast%20MinimumStorage%20RayTriangle%20Intersection.pdf
 
@@ -257,52 +256,44 @@ __device__ bool rayIntersect(const Ray &ray, const Object &object, float &distan
     // E2 = V2 - V0
 
     // D ray direction
-    else if (object.type == triangleObject)
-    {
-        // both edges of the triangle
-        Vec3 edge1 = object.v1 - object.v0;
-        Vec3 edge2 = object.v2 - object.v0;
+    // both edges of the triangle
+    Vec3 edge1 = object.v1 - object.v0;
+    Vec3 edge2 = object.v2 - object.v0;
 
-        Vec3 T = ray.origin - object.v0;
-        /* COME UP WITH BETTER VAR NAMES LATER*/
-        Vec3 P = ray.direction.cross(edge2);
-        Vec3 Q = T.cross(edge1);
+    Vec3 T = ray.origin - object.v0;
+    /* COME UP WITH BETTER VAR NAMES LATER*/
+    Vec3 P = ray.direction.cross(edge2);
+    Vec3 Q = T.cross(edge1);
 
-        float baseDet = P.dot(edge1);
+    float baseDet = P.dot(edge1);
 
-        // just like ground if parallel no bother or near zero
-        if (fabsf(baseDet) < 0.0001f)
-        {
-            return false;
-        }
-
-        // prevents dividing 3 trimes
-        float invDet = 1.0f / baseDet;
-
-        float t = Q.dot(edge2) * invDet;
-        float u = P.dot(T) * invDet;
-        float v = Q.dot(ray.direction) * invDet;
-
-        // also coords u, v must be between 0 and 1
-        // and also must add between 0 and 1 so we check
-        if (u < 0.0f || u > 1.0f)
-            return false; // false if outside range
-        if (v < 0.0f || u + v > 1.0f)
-            return false; // check for less than 0 and combined check for u + v
-
-        if (t > 0.01f)
-        {
-            distance = t;
-            return true;
-        }
-        return false;
-    }
-    else
+    // just like ground if parallel no bother or near zero
+    if (fabsf(baseDet) < 0.0001f)
     {
         return false;
     }
+
+    // prevents dividing 3 trimes
+    float invDet = 1.0f / baseDet;
+
+    float t = Q.dot(edge2) * invDet;
+    float u = P.dot(T) * invDet;
+    float v = Q.dot(ray.direction) * invDet;
+
+    // also coords u, v must be between 0 and 1
+    // and also must add between 0 and 1 so we check
+    if (u < 0.0f || u > 1.0f)
+        return false; // false if outside range
+    if (v < 0.0f || u + v > 1.0f)
+        return false; // check for less than 0 and combined check for u + v
+
+    if (t > 0.01f)
+    {
+        distance = t;
+        return true;
+    }
+    return false;
 }
-
 // searchs through the BVH to find which object ray hits
 __device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BVHNode *bvhNodes, int *bvhObjects, Object *objects)
 {
@@ -331,7 +322,7 @@ __device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BV
         BVHNode node = bvhNodes[nodeIdx];
 
         // do ray test if no intersection then we can skip all objs inside
-        if (!hitAABB(ray, node.box))
+        if (!hitAABB(ray, node.box, closest)
             continue;
 
         // if more than 0 objs in node
@@ -353,7 +344,11 @@ __device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BV
 
                 //  then do normal ray interset with each obj within the box
                 float dist = INFINITY;
-                if (rayIntersect(ray, objects[objIdx], dist))
+                // split into two funcs one for tri and one for sphere easier to check for object type then within one equation
+                bool objectRayIntersect = objects[objIdx].type == triangleObject ? rayIntersectTriangle(ray, objects[objIdx], dist) : rayIntersectSphere(ray, objects[objIdx], dist);
+
+                // then check that bool instead
+                if (objectRayIntersect)
                 {
                     // but we are making sure we always keep the closest obj and its id
                     if (dist < closest)
@@ -513,7 +508,7 @@ __device__ float calcFresnel(const Ray &ray, const Vec3 &surfaceNormal, float re
     return __saturatef(R0 + (1.0f - R0) * __powf(1.0f - cosTheta, 5.0f));
 }
 
-__device__ float processTransparentRay(Ray &ray, const Object &hitObject, int objectIndex, float objectDistance, int insideObjectIndex, Vec3 insideEntryPoint, Vec3 &strengthOfRay, curandState &rng, bool isShadowRay = false)
+__device__ float processTransparentRay(Ray &ray, const Object &hitObject, int objectIndex, float objectDistance, int &insideObjectIndex, Vec3 &insideEntryPoint, Vec3 &strengthOfRay, curandState &rng, bool isShadowRay = false)
 {
     Vec3 rawNormal = calcSurfaceNormal(ray, hitObject);
     // before was assuming that surface normal alaways points against rau direction
@@ -604,6 +599,136 @@ __device__ float processTransparentRay(Ray &ray, const Object &hitObject, int ob
         // inside tracking same reflection doesnt go in obvs
         return hitObject.material.transparency * fresnelValue;
     }
+}
+
+__device__ void processOpaqueRay(Ray &ray, Vec3 surfaceNormal, curandState &rng)
+{
+    // for opquae objects
+    // standard pracise to use diffuse bounce cosine weighted hemisphere sampling
+    // im going to use the example from https://www.pbr-book.org/4ed/Sampling_Algorithms/Sampling_Multidimensional_Functions
+    // adjust ray oirigin like before
+    ray.origin = ray.hitPoint + (surfaceNormal * 0.01f);
+
+    // in real life diffuse light would scatter randomly
+    // could just multiply the random two directions like theta = R1 * PI and phi = R2 * 2PI
+    // however this would sample uniformly accross every directions not realistic
+
+    // in real life diffuse surfaces reflect more light towards the surface normal and less strongly parallel to surface
+    // lambertian reflectance
+
+    // in order for this to work we need to
+    // convert uniform random numbers into directions
+    // this is where we use a direction probability density function
+    // where we use spherical coords as opposed to cartesian
+    // (r, θ, phi)
+    // r - distance from orign
+    // θ - polar angle from vert axis
+    // phi - azimuth angle roattion around vert axis
+
+    // cartesian conversion
+    // x = rsin(θ)cos(phi)
+    // y = rsin(θ)sin(phi)
+    // z = rcos(θ)
+    // as a unit direction vector r = 1 so we can remove that
+
+    // converting back to sphereical given (x,y,z)
+    // distance from origin is gonna be mag of xyz
+    // r = sqrt(x^2 + y^2 + z^2)
+
+    // z = rcos(θ)
+    // cos(θ) = z/r
+
+    // θ = arccos(z/r)
+
+    // we dont need to worry about z coords
+
+    // phi direction around normal
+    // theta how far away from normal
+
+    // we also need the differential solid angle
+    // wont go into this
+    // d(w) = sinθ * dθ * d(phi)
+
+    // paper defines directional PDF as p(w) = cos(θ) / pi
+    // to get a 1D PDF with theta multiply by d(w)
+    // integrate also removing the dθ from d(w) as we are integrating by θ
+    // integral p(w) * sinθ * d(phi)
+    // sub in p(w)
+    // integral (cosθ / pi)sinθ d(phi)
+    // pull out constants
+    // (cosθsinθ / pi) integral d(phi)
+    // integral d(phi) = 2pi
+    // (cosθsinθ / pi) * 2pi
+    // 2sinθcosθ
+    // int from 0  to  theta
+    // F(θ) = int(2sin(t)cos(t))dt
+    // which is the cumulative distribution func
+    // F(θ) = sin^2(θ)
+
+    // for inverse transform sampling we set u, random bumber equal to F
+    // u = sin^2(theta)
+    // sin(theta) = u
+
+    // phi = 2piR1 (uniform around circle)
+    // θ = arccos(sqrt(1-R2))   (weighted towards normal)
+    // where R1 and R2 and random floats
+
+    // generate two random numbers
+    float randNum1 = curand_uniform(&rng);
+    float randNum2 = curand_uniform(&rng);
+
+    // phi = 2piR1
+    float phi = 2.0f * CUDART_PI_F * randNum1;
+
+    // θ = arccos(sqrt(1-R2))
+    // instead of using arccos as it is very expensive
+    // cos(θ) = sqrt(1-R2)
+    // cos^2(θ) = 1-R2
+
+    // classic equation
+    // sin(θ) = sqrt(1-cos^2(θ))
+    // sin(θ) = sqrt(1-(1-R2))
+
+    // sin(θ) = sqrt(R2)
+    // same as our above sin(theta) = u
+    float sinTheta = sqrtf(randNum2);
+    // cos^2(θ) = 1-R2
+    // cos(θ) = sqrt(1-R2)
+    float cosTheta = sqrtf(1.0f - randNum2);
+
+    // in this to represent each axis we create a
+    // tangent for x axis
+    // bitangent for y axis
+    // surfacenormal for z
+
+    // we need a vector that is not parallel to the surface normal
+    // if the abs of x of surfacenormal is than than 0.99
+    // that must mean the normal is not pointing in the x direction
+    // otherwise if it is greater than it then we cant use x bcos they would be parallel so we use Y axis
+    // we must do this later bcos we need the tangent of the surface normal
+    // cross producting to get the tangent to the surface normal with identical same direction would equal 0
+    Vec3 up = fabsf(surfaceNormal.x) < 0.99f
+                  ? Vec3{1.0f, 0.0f, 0.0f}  // use x axis
+                  : Vec3{0.0f, 1.0f, 0.0f}; // if not use y
+
+    // tangent to the surface normal
+    Vec3 tangent = up.cross(surfaceNormal).normalise();
+
+    Vec3 bitangent = surfaceNormal.cross(tangent);
+
+    // they define the bounce direction as
+    // d = T . cos(phi)sinθ + B . sin(phi)sin(θ) + N . cos(θ)
+    // each plus representing each xyz direction
+    // x = T . cos(phi)sinθ
+    // y = B . sin(phi)sin(θ)
+    // z = N . cos(θ)
+    // exactly the same as our cartesian conversion except now we are multipling by the following vectors
+    // T - tangent vector
+    // B - bitangent
+    // N - surface normal
+
+    // putting that all in we get
+    ray.direction = (tangent * (cosf(phi) * sinTheta) + bitangent * (sinf(phi) * sinTheta) + surfaceNormal * cosTheta).normalise();
 }
 
 /*ADD SPECULAR LIGHT TRANSPARENT OBJ SPECULAR I THINK SURELY?*/
@@ -729,6 +854,47 @@ __global__ void initRNGKernel(curandState *states, int width, int height)
     curand_init(1000, pixelIndex, 0, &states[pixelIndex]);
 }
 
+// ACES approximation https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
+// common tone mapping curve to make it look better
+__device__ __forceinline__ float acesToneMap(float x)
+{
+    float a = 2.51f, b = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;
+    return __saturatef((x * (a * x + b)) / (x * (c * x + d) + e));
+}
+__device__ Vec3 accumulateColour(Vec3 *accumulation, Vec3 processedColour, int pixelIndex, int frameIndex)
+{
+    // accumulates the colour from this frame and previous building up a multi frame average image
+    accumulation[pixelIndex].x += processedColour.x;
+    accumulation[pixelIndex].y += processedColour.y;
+    accumulation[pixelIndex].z += processedColour.z;
+    // computes averages colour across all of the frames so far
+    // helps smoothen out noise
+    float inverseFrame = 1.0f / (float)(frameIndex + 1);
+    Vec3 accumulatedColour;
+
+    accumulatedColour.x = accumulation[pixelIndex].x * inverseFrame;
+    accumulatedColour.y = accumulation[pixelIndex].y * inverseFrame;
+    accumulatedColour.z = accumulation[pixelIndex].z * inverseFrame;
+
+    return accumulatedColour;
+}
+
+__device__ uchar4 toneMappedPixel(Vec3 *accumulation, int pixelIndex, int frameIndex, Vec3 processedColour)
+{
+    Vec3 accumulatedColour = accumulateColour(accumulation, processedColour, pixelIndex, frameIndex);
+    // scales exposure
+    const float exposure = 0.6f;
+    float r = sqrtf(acesToneMap(accumulatedColour.x * exposure));
+    float g = sqrtf(acesToneMap(accumulatedColour.y * exposure));
+    float b = sqrtf(acesToneMap(accumulatedColour.z * exposure));
+
+    unsigned char finalR = (unsigned char)(__saturatef(r) * 255.0f);
+    unsigned char finalG = (unsigned char)(__saturatef(g) * 255.0f);
+    unsigned char finalB = (unsigned char)(__saturatef(b) * 255.0f);
+
+    return make_uchar4(finalR, finalG, finalB, 255);
+}
+
 __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accumulation, int frameIndex, int screenWidth, int screenHeight, BVHNode *bvhNodes, int *bvhObjects, Object *objects)
 {
     int pixelX = blockIdx.x * blockDim.x + threadIdx.x;
@@ -815,133 +981,8 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
                 }
                 else
                 {
-                    // for opquae objects
-                    // standard pracise to use diffuse bounce cosine weighted hemisphere sampling
-                    // im going to use the example from https://www.pbr-book.org/4ed/Sampling_Algorithms/Sampling_Multidimensional_Functions
-                    // adjust ray oirigin like before
-                    ray.origin = hitPoint + (surfaceNormal * 0.01f);
-
-                    // in real life diffuse light would scatter randomly
-                    // could just multiply the random two directions like theta = R1 * PI and phi = R2 * 2PI
-                    // however this would sample uniformly accross every directions not realistic
-
-                    // in real life diffuse surfaces reflect more light towards the surface normal and less strongly parallel to surface
-                    // lambertian reflectance
-
-                    // in order for this to work we need to
-                    // convert uniform random numbers into directions
-                    // this is where we use a direction probability density function
-                    // where we use spherical coords as opposed to cartesian
-                    // (r, θ, phi)
-                    // r - distance from orign
-                    // θ - polar angle from vert axis
-                    // phi - azimuth angle roattion around vert axis
-
-                    // cartesian conversion
-                    // x = rsin(θ)cos(phi)
-                    // y = rsin(θ)sin(phi)
-                    // z = rcos(θ)
-                    // as a unit direction vector r = 1 so we can remove that
-
-                    // converting back to sphereical given (x,y,z)
-                    // distance from origin is gonna be mag of xyz
-                    // r = sqrt(x^2 + y^2 + z^2)
-
-                    // z = rcos(θ)
-                    // cos(θ) = z/r
-
-                    // θ = arccos(z/r)
-
-                    // we dont need to worry about z coords
-
-                    // phi direction around normal
-                    // theta how far away from normal
-
-                    // we also need the differential solid angle
-                    // wont go into this
-                    // d(w) = sinθ * dθ * d(phi)
-
-                    // paper defines directional PDF as p(w) = cos(θ) / pi
-                    // to get a 1D PDF with theta multiply by d(w)
-                    // integrate also removing the dθ from d(w) as we are integrating by θ
-                    // integral p(w) * sinθ * d(phi)
-                    // sub in p(w)
-                    // integral (cosθ / pi)sinθ d(phi)
-                    // pull out constants
-                    // (cosθsinθ / pi) integral d(phi)
-                    // integral d(phi) = 2pi
-                    // (cosθsinθ / pi) * 2pi
-                    // 2sinθcosθ
-                    // int from 0  to  theta
-                    // F(θ) = int(2sin(t)cos(t))dt
-                    // which is the cumulative distribution func
-                    // F(θ) = sin^2(θ)
-
-                    // for inverse transform sampling we set u, random bumber equal to F
-                    // u = sin^2(theta)
-                    // sin(theta) = u
-
-                    // phi = 2piR1 (uniform around circle)
-                    // θ = arccos(sqrt(1-R2))   (weighted towards normal)
-                    // where R1 and R2 and random floats
-
-                    // generate two random numbers
-                    float randNum1 = curand_uniform(&rng);
-                    float randNum2 = curand_uniform(&rng);
-
-                    // phi = 2piR1
-                    float phi = 2.0f * CUDART_PI_F * randNum1;
-
-                    // θ = arccos(sqrt(1-R2))
-                    // instead of using arccos as it is very expensive
-                    // cos(θ) = sqrt(1-R2)
-                    // cos^2(θ) = 1-R2
-
-                    // classic equation
-                    // sin(θ) = sqrt(1-cos^2(θ))
-                    // sin(θ) = sqrt(1-(1-R2))
-
-                    // sin(θ) = sqrt(R2)
-                    // same as our above sin(theta) = u
-                    float sinTheta = sqrtf(randNum2);
-                    // cos^2(θ) = 1-R2
-                    // cos(θ) = sqrt(1-R2)
-                    float cosTheta = sqrtf(1.0f - randNum2);
-
-                    // in this to represent each axis we create a
-                    // tangent for x axis
-                    // bitangent for y axis
-                    // surfacenormal for z
-
-                    // we need a vector that is not parallel to the surface normal
-                    // if the abs of x of surfacenormal is than than 0.99
-                    // that must mean the normal is not pointing in the x direction
-                    // otherwise if it is greater than it then we cant use x bcos they would be parallel so we use Y axis
-                    // we must do this later bcos we need the tangent of the surface normal
-                    // cross producting to get the tangent to the surface normal with identical same direction would equal 0
-                    Vec3 up = fabsf(surfaceNormal.x) < 0.99f
-                                  ? Vec3{1.0f, 0.0f, 0.0f}  // use x axis
-                                  : Vec3{0.0f, 1.0f, 0.0f}; // if not use y
-
-                    // tangent to the surface normal
-                    Vec3 tangent = up.cross(surfaceNormal).normalise();
-
-                    Vec3 bitangent = surfaceNormal.cross(tangent);
-
-                    // they define the bounce direction as
-                    // d = T . cos(phi)sinθ + B . sin(phi)sin(θ) + N . cos(θ)
-                    // each plus representing each xyz direction
-                    // x = T . cos(phi)sinθ
-                    // y = B . sin(phi)sin(θ)
-                    // z = N . cos(θ)
-                    // exactly the same as our cartesian conversion except now we are multipling by the following vectors
-                    // T - tangent vector
-                    // B - bitangent
-                    // N - surface normal
-
-                    // putting that all in we get
-                    ray.direction = (tangent * (cosf(phi) * sinTheta) + bitangent * (sinf(phi) * sinTheta) + surfaceNormal * cosTheta).normalise();
-
+                    // calcs via opaque ray function simples the code
+                    processOpaqueRay(ray, surfaceNormal, rng);
                     strengthOfRay = strengthOfRay * hitObject.material.colour;
                 }
 
@@ -965,40 +1006,9 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
     // storing rgba values
     Vec3 processedColour = postSampleColour * (1.0f / float(samplesPerPixel));
 
-    int index = pixelIndex;
-
-    // accumulates the colour from this frame and previous building up a multi frame average image
-    accumulation[index].x += processedColour.x;
-    accumulation[index].y += processedColour.y;
-    accumulation[index].z += processedColour.z;
-
-    // computes averages colour across all of the frames so far
-    // helps smoothen out noise
-    float inverseFrame = 1.0f / (float)(frameIndex + 1);
-    float r = accumulation[index].x * inverseFrame;
-    float g = accumulation[index].y * inverseFrame;
-    float b = accumulation[index].z * inverseFrame;
-
-    // ACES approximation https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
-    // common tone mapping curve to make it look better
-    auto aces = [](float x)
-    {
-        float a = 2.51f, b = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;
-        return __saturatef((x * (a * x + b)) / (x * (c * x + d) + e));
-    };
-
-    // scales exposure
-    const float exposure = 0.6f;
-    r = sqrtf(aces(r * exposure));
-    g = sqrtf(aces(g * exposure));
-    b = sqrtf(aces(b * exposure));
-
-    unsigned char finalR = (unsigned char)(__saturatef(r) * 255.0f);
-    unsigned char finalG = (unsigned char)(__saturatef(g) * 255.0f);
-    unsigned char finalB = (unsigned char)(__saturatef(b) * 255.0f);
-
     rngStates[pixelIndex] = rng;
-    pixels[pixelIndex] = make_uchar4(finalR, finalG, finalB, 255);
+
+    pixels[pixelIndex] = toneMappedPixel(accumulation, pixelIndex, frameIndex, processedColour);
 }
 
 // these functions now help avoid mem being allocated everyframe
@@ -1021,10 +1031,39 @@ void freeDevicePixels()
     cudaFree(deviceAccumulation);
 }
 
+inline void addSphere(Object *objects, int &objectCount, const Vec3 &pos, const Material &mat, const float &radius)
+{
+    objects[objectCount].position = pos;
+    objects[objectCount].material = mat;
+    objects[objectCount].type = sphereObject;
+    objects[objectCount].radius = radius;
+    objectCount++;
+}
+
+inline void addTriangle(Object *objects, int &objectCount, const Vec3 &v0, const Vec3 &v1, const Vec3 &v2, const Material &mat)
+{
+    objects[objectCount].v0 = v0;
+    objects[objectCount].v1 = v1;
+    objects[objectCount].v2 = v2;
+    objects[objectCount].material = mat;
+    objects[objectCount].type = triangleObject;
+    objectCount++;
+}
+
+// can use the triangles to make a quad by defining 4 corners making up a quad
+// v0 bottom left
+// v1 top left
+// v2 top right
+// v3 bottom right
+inline void addQuadAsTwoTriangles(Object *objects, int &objectCount, const Vec3 &v0, const Vec3 &v1, const Vec3 &v2, const Vec3 &v3, const Material &mat)
+{
+    addTriangle(objects, objectCount, v0, v1, v2, mat);
+    addTriangle(objects, objectCount, v2, v3, v0, mat);
+}
+
 // additioned init scene to prevent reloading the scene
 // H prefix meaning host
 /*MAYBE MAKE THIS MORE CLEAR*/
-
 void initScene()
 {
     Light Hlight = {
@@ -1043,152 +1082,65 @@ void initScene()
     Material whiteWall = {{0.85f, 0.85f, 0.85f}, 0.35f, 0.75f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
     Material redWall = {{0.75f, 0.10f, 0.10f}, 0.30f, 0.70f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
     Material greenWall = {{0.10f, 0.65f, 0.10f}, 0.30f, 0.70f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
+    Material lightFixtureMaterial = {{1.0f, 1.0f, 1.0f}, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {15.0f, 15.0f, 14.0f}};
+    Material sphereBlue = {{0.2f, 0.2f, 0.8f}, 0.35f, 0.75f, 0.05f, 64.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
+    Material sphereGlass = {{0.9f, 0.9f, 0.9f}, 0.0f, 0.0f, 0.95f, 64.0f, 1.0f, 1.5f, {0.05f, 0.1f, 0.1f}, {0.0f, 0.0f, 0.0f}};
+
+    // lighting fixture
+    addQuadAsTwoTriangles(
+        Hobjects, HobjectCount,
+        {-0.5f, 2.999f, -5.5f}, {-0.5f, 2.999f, -4.5f},
+        {0.5f, 2.999f, -4.5f}, {0.5f, 2.999f, -5.5f}, lightFixtureMaterial);
 
     // back wall
-    Hobjects[HobjectCount].v0 = {-3.0f, -3.0f, -8.0f};
-    Hobjects[HobjectCount].v1 = {-3.0f, 3.0f, -8.0f};
-    Hobjects[HobjectCount].v2 = {3.0f, -3.0f, -8.0f};
-    Hobjects[HobjectCount].material = whiteWall;
-    Hobjects[HobjectCount].type = triangleObject;
-    HobjectCount++;
-
-    Hobjects[HobjectCount].v0 = {3.0f, -3.0f, -8.0f};
-    Hobjects[HobjectCount].v1 = {-3.0f, 3.0f, -8.0f};
-    Hobjects[HobjectCount].v2 = {3.0f, 3.0f, -8.0f};
-    Hobjects[HobjectCount].material = whiteWall;
-    Hobjects[HobjectCount].type = triangleObject;
-    HobjectCount++;
+    addQuadAsTwoTriangles(
+        Hobjects, HobjectCount,
+        {3.0f, -3.0f, -8.0f}, {-3.0f, -3.0f, -8.0f},
+        {-3.0f, 3.0f, -8.0f}, {3.0f, 3.0f, -8.0f},
+        whiteWall);
 
     // left wall red
-    Hobjects[HobjectCount].v0 = {-3.0f, -3.0f, -8.0f};
-    Hobjects[HobjectCount].v1 = {-3.0f, -3.0f, 1.0f};
-    Hobjects[HobjectCount].v2 = {-3.0f, 3.0f, -8.0f};
-    Hobjects[HobjectCount].material = redWall;
-    Hobjects[HobjectCount].type = triangleObject;
-    HobjectCount++;
-
-    Hobjects[HobjectCount].v0 = {-3.0f, -3.0f, 1.0f};
-    Hobjects[HobjectCount].v1 = {-3.0f, 3.0f, 1.0f};
-    Hobjects[HobjectCount].v2 = {-3.0f, 3.0f, -8.0f};
-    Hobjects[HobjectCount].material = redWall;
-    Hobjects[HobjectCount].type = triangleObject;
-    HobjectCount++;
+    addQuadAsTwoTriangles(
+        Hobjects, HobjectCount,
+        {-3.0f, -3.0f, 1.0f}, {-3.0f, 3.0f, 1.0f},
+        {-3.0f, 3.0f, -8.0f}, {-3.0f, -3.0f, -8.0f},
+        redWall);
 
     // right wall green
-    Hobjects[HobjectCount].v0 = {3.0f, -3.0f, 1.0f};
-    Hobjects[HobjectCount].v1 = {3.0f, -3.0f, -8.0f};
-    Hobjects[HobjectCount].v2 = {3.0f, 3.0f, -8.0f};
-    Hobjects[HobjectCount].material = greenWall;
-    Hobjects[HobjectCount].type = triangleObject;
-    HobjectCount++;
-
-    Hobjects[HobjectCount].v0 = {3.0f, -3.0f, 1.0f};
-    Hobjects[HobjectCount].v1 = {3.0f, 3.0f, -8.0f};
-    Hobjects[HobjectCount].v2 = {3.0f, 3.0f, 1.0f};
-    Hobjects[HobjectCount].material = greenWall;
-    Hobjects[HobjectCount].type = triangleObject;
-    HobjectCount++;
+    addQuadAsTwoTriangles(
+        Hobjects, HobjectCount,
+        {3.0f, -3.0f, 1.0f}, {3.0f, -3.0f, -8.0f},
+        {3.0f, 3.0f, -8.0f}, {3.0f, 3.0f, 1.0f},
+        greenWall);
 
     // floor
-    Hobjects[HobjectCount].v0 = {-3.0f, -3.0f, -8.0f};
-    Hobjects[HobjectCount].v1 = {3.0f, -3.0f, -8.0f};
-    Hobjects[HobjectCount].v2 = {-3.0f, -3.0f, 1.0f};
-    Hobjects[HobjectCount].material = whiteWall;
-    Hobjects[HobjectCount].type = triangleObject;
-    HobjectCount++;
-
-    Hobjects[HobjectCount].v0 = {-3.0f, -3.0f, 1.0f};
-    Hobjects[HobjectCount].v1 = {3.0f, -3.0f, -8.0f};
-    Hobjects[HobjectCount].v2 = {3.0f, -3.0f, 1.0f};
-    Hobjects[HobjectCount].material = whiteWall;
-    Hobjects[HobjectCount].type = triangleObject;
-    HobjectCount++;
+    addQuadAsTwoTriangles(
+        Hobjects, HobjectCount,
+        {-3.0f, -3.0f, 1.0f}, {-3.0f, -3.0f, -8.0f},
+        {3.0f, -3.0f, -8.0f}, {3.0f, -3.0f, 1.0f},
+        whiteWall);
 
     // ceiling
-    Hobjects[HobjectCount].v0 = {-3.0f, 3.0f, -8.0f};
-    Hobjects[HobjectCount].v1 = {-3.0f, 3.0f, 1.0f};
-    Hobjects[HobjectCount].v2 = {3.0f, 3.0f, -8.0f};
-    Hobjects[HobjectCount].material = whiteWall;
-    Hobjects[HobjectCount].type = triangleObject;
-    HobjectCount++;
-
-    Hobjects[HobjectCount].v0 = {-3.0f, 3.0f, 1.0f};
-    Hobjects[HobjectCount].v1 = {3.0f, 3.0f, 1.0f};
-    Hobjects[HobjectCount].v2 = {3.0f, 3.0f, -8.0f};
-    Hobjects[HobjectCount].material = whiteWall;
-    Hobjects[HobjectCount].type = triangleObject;
-    HobjectCount++;
+    addQuadAsTwoTriangles(
+        Hobjects, HobjectCount,
+        {-3.0f, 3.0f, 1.0f}, {3.0f, 3.0f, 1.0f},
+        {3.0f, 3.0f, -8.0f}, {-3.0f, 3.0f, -8.0f},
+        whiteWall);
 
     // front wall
-    Hobjects[HobjectCount].v0 = {-3.0f, -3.0f, 1.0f};
-    Hobjects[HobjectCount].v1 = {3.0f, -3.0f, 1.0f};
-    Hobjects[HobjectCount].v2 = {-3.0f, 3.0f, 1.0f};
-    Hobjects[HobjectCount].material = whiteWall;
-    Hobjects[HobjectCount].type = triangleObject;
-    HobjectCount++;
+    addQuadAsTwoTriangles(
+        Hobjects, HobjectCount,
+        {-3.0f, 3.0f, 1.0f}, {-3.0f, -3.0f, 1.0f},
+        {3.0f, -3.0f, 1.0f}, {3.0f, 3.0f, 1.0f},
+        whiteWall);
 
-    Hobjects[HobjectCount].v0 = {3.0f, -3.0f, 1.0f};
-    Hobjects[HobjectCount].v1 = {3.0f, 3.0f, 1.0f};
-    Hobjects[HobjectCount].v2 = {-3.0f, 3.0f, 1.0f};
-    Hobjects[HobjectCount].material = whiteWall;
-    Hobjects[HobjectCount].type = triangleObject;
-    HobjectCount++;
+    addSphere(
+        Hobjects, HobjectCount,
+        {-1.0f, -1.5f, -6.0f}, sphereBlue, 1.0f);
 
-    // sphere 1
-    Hobjects[HobjectCount].position = {-1.0f, -1.5f, -6.0f};
-    Hobjects[HobjectCount].material = {
-        {0.2f, 0.2f, 0.8f},
-        0.35f,              // ambient
-        0.75f,              // diffuse
-        0.05f,              // specular
-        64.0f,              // shininess
-        0.0f,               // transparency
-        1.0f,               // refraction factor
-        {0.0f, 0.0f, 0.0f}, // absorption
-        {0.0f, 0.0f, 0.0f}  // emission
-    };
-    Hobjects[HobjectCount].type = sphereObject;
-    Hobjects[HobjectCount].radius = 1.0f;
-    HobjectCount++;
-
-    // sphejre glass
-    Hobjects[HobjectCount].position = {1.45f, -1.5f, -4.5f};
-    Hobjects[HobjectCount].material = {
-        {0.9f, 0.9f, 0.9f},
-        0.0f,                // ambient
-        0.0f,                // diffuse
-        0.95f,               // specular
-        64.0f,               // shininess
-        1.0f,                // transparency
-        1.5f,                // refraction factor
-        {0.05f, 0.3f, 0.3f}, // absorption, green and blue
-        {0.0f, 0.0f, 0.0f}   // emission
-    };
-    Hobjects[HobjectCount].type = sphereObject;
-    Hobjects[HobjectCount].radius = 1.0f;
-    HobjectCount++;
-
-    // light quad for light fixture
-    Material lightFixtureMaterial = {
-        {1.0f, 1.0f, 1.0f}, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, // absorption
-        {15.0f, 15.0f, 14.0f}                                                       // emission
-    };
-
-    // tri1 just below light
-    Hobjects[HobjectCount].v0 = {-0.5f, 2.999f, -5.5f};
-    Hobjects[HobjectCount].v1 = {-0.5f, 2.999f, -4.5f};
-    Hobjects[HobjectCount].v2 = {0.5f, 2.999f, -5.5f};
-    Hobjects[HobjectCount].material = lightFixtureMaterial;
-    Hobjects[HobjectCount].type = triangleObject;
-    HobjectCount++;
-
-    // rria 2
-    Hobjects[HobjectCount].v0 = {0.5f, 2.999f, -5.5f};
-    Hobjects[HobjectCount].v1 = {-0.5f, 2.999f, -4.5f};
-    Hobjects[HobjectCount].v2 = {0.5f, 2.999f, -4.5f};
-    Hobjects[HobjectCount].material = lightFixtureMaterial;
-    Hobjects[HobjectCount].type = triangleObject;
-    HobjectCount++;
+    addSphere(
+        Hobjects, HobjectCount,
+        {1.45f, -1.5f, -4.5f}, sphereGlass, 1.0f);
 
     // build bvh
     BuildObject buildObject[64];

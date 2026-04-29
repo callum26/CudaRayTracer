@@ -97,13 +97,13 @@ __host__ __device__ float surfaceAreaAABB(const AABB &box)
     return 2.0f * (extent.x * extent.y + extent.x * extent.z + extent.y * extent.z);
 }
 
-__device__ bool hitAABB(const Ray &ray, const AABB &box)
+__device__ bool hitAABB(const Ray &ray, const AABB &box, float maxDistance = INFINITY)
 {
     // simialr to our ray intersection we need to find
     // the ray distance min and max to find where we should focus the intersection on
     // if ray is outside of these ranges it hasnt hit the box
     float rayMinDistance = 0.001f;
-    float rayMaxDistance = INFINITY;
+    float rayMaxDistance = maxDistance;
 
     // R = O + tD
     // same with other interesctions if we assume a point P to be our ray equation
@@ -115,39 +115,56 @@ __device__ bool hitAABB(const Ray &ray, const AABB &box)
     // we need to rearrange to find for t(min) and t(max)
     // t(min) = (P - O) / D
     // t(max) = (P - O) / D
-    // each xyz is calculated respective of one another so we repeat the equation 3 times
-    // so need to loop through each axes
 
-    for (int i = 0; i < 3; i++)
+    // okay wasnt produced wanted results fiund out about
+    // early termination in BVH
+    // can help reduce the amount of intersections for hit
+    // it was checking every box regardless if one closer was hit
+    // also Alia and Laine say BVH traversal efficency on GPU focsuses more on reducing node costs than tree sttrcuture
+
+    // althgouhg its repeating code its more effective for the gpu to know straight away
+    float invDirX = 1.0f / ray.direction.x;
+    float nearHitX = (box.boxMin.x - ray.origin.x) * invDirX;
+    float farHitX = (box.boxMax.x - ray.origin.x) * invDirX;
+    if (invDirX < 0.0f)
     {
-        // get all components need for each
-        float rayOrigin = getAxisComponent(ray.origin, i);
-        float rayDirection = getAxisComponent(ray.direction, i);
-        float boxMin = getAxisComponent(box.boxMin, i);
-        float boxMax = getAxisComponent(box.boxMax, i);
-
-        // classic bcos we r diving more than once store it
-        float inverseDirection = 1.0f / rayDirection;
-        float rayNearHit = (boxMin - rayOrigin) * inverseDirection;
-        float rayFarHit = (boxMax - rayOrigin) * inverseDirection;
-
-        // if direction is negative we need to swap the near and far as they will be inversed
-        // ensuring near is always the smallest and far is always largest
-        if (inverseDirection < 0.0f)
-        {
-            float temp = rayNearHit;
-            rayNearHit = rayFarHit;
-            rayFarHit = temp;
-        }
-
-        // clamp them to our bounds at the top of the func
-        rayMinDistance = fmaxf(rayMinDistance, rayNearHit);
-        rayMaxDistance = fminf(rayMaxDistance, rayFarHit);
-        if (rayMaxDistance < rayMinDistance)
-        {
-            return false; // if min exceeds max then it must no longe be in box
-        }
+        float temp = nearHitX;
+        nearHitX = farHitX;
+        farHitX = temp;
     }
+    rayMinDistance = fmaxf(rayMinDistance, nearHitX);
+    rayMaxDistance = fminf(rayMaxDistance, farHitX);
+    if (rayMaxDistance < rayMinDistance)
+        return false;
+
+    float invDirY = 1.0f / ray.direction.y;
+    float nearHitY = (box.boxMin.y - ray.origin.y) * invDirY;
+    float farHitY = (box.boxMax.y - ray.origin.y) * invDirY;
+    if (invDirY < 0.0f)
+    {
+        float temp = nearHitY;
+        nearHitY = farHitY;
+        farHitY = temp;
+    }
+    rayMinDistance = fmaxf(rayMinDistance, nearHitY);
+    rayMaxDistance = fminf(rayMaxDistance, farHitY);
+    if (rayMaxDistance < rayMinDistance)
+        return false;
+
+    float invDirZ = 1.0f / ray.direction.z;
+    float nearHitZ = (box.boxMin.z - ray.origin.z) * invDirZ;
+    float farHitZ = (box.boxMax.z - ray.origin.z) * invDirZ;
+    if (invDirZ < 0.0f)
+    {
+        float temp = nearHitZ;
+        nearHitZ = farHitZ;
+        farHitZ = temp;
+    }
+    rayMinDistance = fmaxf(rayMinDistance, nearHitZ);
+    rayMaxDistance = fminf(rayMaxDistance, farHitZ);
+    if (rayMaxDistance < rayMinDistance)
+        return false;
+
     return true;
 }
 
