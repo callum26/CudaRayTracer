@@ -180,4 +180,10 @@ struct SAHBucket
     AABB bounds;
 };
 
+struct SurfaceInteraction
+{
+    Vec3 normal;
+    bool inside;
+};
+
 #endif
