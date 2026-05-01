@@ -322,7 +322,7 @@ __device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BV
         BVHNode node = bvhNodes[nodeIdx];
 
         // do ray test if no intersection then we can skip all objs inside
-        if (!hitAABB(ray, node.box, closest)
+        if (!hitAABB(ray, node.box, closest))
             continue;
 
         // if more than 0 objs in node
@@ -451,51 +451,72 @@ __device__ void calcLighting(const Ray &ray, const Light &light, float distanceT
     specular = (light.specularIntensity * (light.lightIntensity * lightScaling)) * (object.material.specularReflectivity * __powf(reflectdotOriginToHit, object.material.shininess));
 }
 
-// to calculate refraction snells law is used
-// snells law defined as
-// n1 * sin(theta1) = n2 * sin(theta2)
-// n representing the refraction factor of a material (medium 1 and 2)
-// in our case n1 is the air n2 would be the glass object
-// theta1 angle between incoming light ray and surface norm
-// theta2 result angle of the bent light ray after it enters new material
-
-__device__ Vec3 calculateRefraction(const Ray &ray, const Vec3 &surfaceNormal, const Object &object, const float &refractionRatio)
+// refraction ray direction
+__device__ Vec3 calcRefractionDir(const Ray &ray, const Vec3 &surfaceNormal, const float &refractionIndex)
 {
-    // to find we do the dot product of the ray direction to find the cosine angle
-    // clamp cos 0-1 cosine angle
-    // minus direction bcos we need the direction reversed so we can work out the angle incident
-    float incomingAngle = __saturatef(-ray.direction.dot(surfaceNormal));
-    // in 3d space split it into horiz and vertic
-    // we need the horizontal movement of the ray so we calcualte the ray parallel to te surface
-    // multiplying the surface normal by the incoming angle gives an opposite vector
-    // adding it to the ray cancels out any vertical movement without affecting the horizontal direction
-    Vec3 parallelRaySurface = (ray.direction + (surfaceNormal * incomingAngle)) * refractionRatio;
-    // to calc the vertical componet we can use pythagoras theorm
-    // a^2 + b^2 = c^2
-    // final ray must have a magnitude of 1 hence c^2 must = 1
-    // we already have our magnitude equation being
-    // mag(vector) = sqrt(x^2 + y^2 + z^2)
-    // if we square this it leaves us with x^2 + y^2 + z^2 which is useful
-    // bcos we can turn it to pythag equation
-    /* PROBABLY BETTER WAY TO DO THIS BCOS MAGNITUDE IS SQTF THEN UNDOINIG WITH POWF SORT THAT OUT LATER*/
-    float parallelRayMagSq = parallelRaySurface.dot(parallelRaySurface);
-    // we know c = 1 so
-    // a^2 + b^2 = 1
-    // a is our horiz movement we need b
-    // b^2 = 1 - a^2
-    // b = sqrt(1-a^2)
-    // this will return the mag of our b
-    if (parallelRayMagSq > 1.0f)
+    // using snells law in vectorised from
+    // T = nI + (nc1 - sqrt(1-n^2(1-c1^2)))N
+    // T refracted ray
+    // I incident vector
+    // N surface normal
+    // n1, n2 refractive indices/  n being the ratio between n1/n2
+    // c1 the negative cosine of the incident angle
+    float refractionIndexSq = refractionIndex * refractionIndex;
+    // cosTheta -incident angle cosine from incoming ray and surface normal is -I . N
+    float cosThetaI = __saturatef(-ray.direction.dot(surfaceNormal)); // shouldnt be anyways but stops angles larger than 1
+    // as we are sqrting 1-n^2(1-c1^2) we must make sure that that part
+    // known as the transmitted angle term is not negative otherwise that total internal reflection
+    // snells law referred to as
+    // n1sin(thetaI) = n2sin(thetaT)
+    // common rearangement
+    // n1/n2sin(thetaI) = sin(thetaT)
+    // nsin(thetaI) = sin(thetaT)
+    // n^2 sin^2(thetaI) = sin^2(thetaT)
+    // n^2 (1 - cos^2(thetaI)) = = sin^2(thetaT)
+    // which is the same as n^2(1-c1^2) just missing the 1-
+    // if we calc sin^2 theta we can know if we have to exit early
+    float sin2ThetaT = refractionIndexSq * (1 - cosThetaI * cosThetaI);
+    // as we are 1 - sin2Theta if sin2Theta > 1 then it would become negative
+    if (sin2ThetaT > 1.0f)
+        return (ray.direction - (surfaceNormal * (2.0f * ray.direction.dot(surfaceNormal)))).normalise();
+    // else return full equation
+    // T = nI + N(nc1 - sqrt(1-n^2(1-c1^2)))
+    return ((ray.direction * refractionIndex) + (surfaceNormal * (refractionIndex * cosThetaI - sqrtf(fmaxf(0.0f, 1.0f - sin2ThetaT))))).normalise();
+}
+
+// reflected ray direction
+__device__ Vec3 calcReflectionDir(const Ray &ray, const Vec3 &surfaceNormal)
+{
+    // R = I - 2N(I . N)
+    // R reflected ray
+    // I incident ray
+    // N surface normal
+    // easier to R = I - N * (2 * (I . N)) in this case bcos of the way the vec3s r calced
+    Vec3 reflectDir = ray.direction - (surfaceNormal * (2.0f * ray.direction.dot(surfaceNormal)));
+    return reflectDir.normalise();
+}
+
+__device__ void applyBeerLambertAbsorption(Vec3 &strengthOfRay, const Object &hitObject, int objectIndex, int insideObjectIndex, const Vec3 &insideEntryPoint, const Ray &ray)
+{
+    if (insideObjectIndex == objectIndex)
     {
-        // if over 1 normal refraction
-        return ray.direction - (surfaceNormal * (ray.direction.dot(surfaceNormal) * 2.0f));
+        // inside of passing in object distance we have to calculate the obj dist
+        // between ray hit point and new inside entry point
+        float objectDistance = (ray.hitPoint - insideEntryPoint).magnitude();
+        if (objectDistance <= 0.0f)
+            return;
+
+        Vec3 absorption = hitObject.material.absorption;
+        // expf returns e^x where x is ()
+        strengthOfRay.x *= __expf(-absorption.x * objectDistance);
+        strengthOfRay.y *= __expf(-absorption.y * objectDistance);
+        strengthOfRay.z *= __expf(-absorption.z * objectDistance);
     }
-    float perpendicularRayMag = sqrtf(1.0f - parallelRayMagSq);
-    // work backwords to find out the vector
-    // flip the ray bcos the surface normal points opposite direction out of the surface instead inside
-    Vec3 perpendicularRaySurface = surfaceNormal * (-perpendicularRayMag);
-    // then add two components together to get the new vector
-    return parallelRaySurface + perpendicularRaySurface;
+}
+
+__device__ void offsetRayOrigin(Ray &ray, const Vec3 &offsetDirection, float offsetAmount)
+{
+    ray.origin = ray.hitPoint + (offsetDirection * offsetAmount);
 }
 
 /*EXPLAIN THIS*/
@@ -508,19 +529,26 @@ __device__ float calcFresnel(const Ray &ray, const Vec3 &surfaceNormal, float re
     return __saturatef(R0 + (1.0f - R0) * __powf(1.0f - cosTheta, 5.0f));
 }
 
-__device__ float processTransparentRay(Ray &ray, const Object &hitObject, int objectIndex, float objectDistance, int &insideObjectIndex, Vec3 &insideEntryPoint, Vec3 &strengthOfRay, curandState &rng, bool isShadowRay = false)
+__device__ __forceinline__ SurfaceInteraction computeSurfaceInteraction(const Ray &ray, const Vec3 &rawNormal)
 {
-    Vec3 rawNormal = calcSurfaceNormal(ray, hitObject);
+    SurfaceInteraction interaction;
     // before was assuming that surface normal alaways points against rau direction
-    bool inside = ray.direction.dot(rawNormal) > 0.0f;
+    interaction.inside = ray.direction.dot(rawNormal) > 0.0f;
     // now testing it against ray direction if true then inside
 
     // flips normal if inside
-    Vec3 surfaceNormal = inside
+    interaction.normal = interaction.inside
                              ? rawNormal * -1.0f
                              : rawNormal;
+    return interaction;
+}
+
+__device__ float processTransparentRay(Ray &ray, const Object &hitObject, int objectIndex, float objectDistance, int &insideObjectIndex, Vec3 &insideEntryPoint, Vec3 &strengthOfRay, curandState &rng, Vec3 &surfaceNormal, bool isShadowRay = false)
+{
+    SurfaceInteraction interaction = computeSurfaceInteraction(ray, surfaceNormal);
+    surfaceNormal = interaction.normal;
     // also adjusts refraction ratio because its changes depending on exit / entrance
-    float refractionRatio = inside
+    float refractionRatio = interaction.inside
                                 ? hitObject.material.refraction
                                 : 1.0f / hitObject.material.refraction;
 
@@ -531,41 +559,52 @@ __device__ float processTransparentRay(Ray &ray, const Object &hitObject, int ob
     // I0 inital strength
     // a is abosorption coeff
     // d is distance travel through medium
-    if (insideObjectIndex == objectIndex && objectDistance > 0.0f)
-    {
-        Vec3 absorption = hitObject.material.absorption;
-        // expf returns e^x where x is ()
-        strengthOfRay.x *= __expf(-absorption.x * objectDistance);
-        strengthOfRay.y *= __expf(-absorption.y * objectDistance);
-        strengthOfRay.z *= __expf(-absorption.z * objectDistance);
-    }
+    applyBeerLambertAbsorption(strengthOfRay, hitObject, objectIndex, insideObjectIndex, insideEntryPoint, ray);
 
     // for traingles as they are open sufraces they can just pass throyg
     if (hitObject.type == triangleObject)
     {
         // make sure adv origin past the surface so no slef intersect
-        ray.origin = ray.hitPoint + (ray.direction * 0.01f);
+        offsetRayOrigin(ray, ray.direction, 0.001f);
         // direction unchanged
-        return hitObject.material.transparency;
+        return 1.0f;
     }
+
+    float cosTheta = fminf(fabsf(ray.direction.dot(surfaceNormal)), 1.0f);
+    float sin2ThetaT = refractionRatio * refractionRatio * (1.0f - cosTheta * cosTheta);
+    bool totalInternalReflection = sin2ThetaT > 1.0f;
 
     float fresnelValue = calcFresnel(ray, surfaceNormal, refractionRatio);
 
     // for spheres
     // we need to decide either to refract or reflectusing  fresnel
     // on shadow ray always refract
-    bool doRefract = isShadowRay || (curand_uniform(&rng) > fresnelValue);
+    bool doReflect = totalInternalReflection || (!isShadowRay && (curand_uniform(&rng) < fresnelValue));
 
-    if (doRefract)
+    if (doReflect)
+    {
+        // specular reflection branch primary ray only
+        // reflect ray off the surface normal
+        // clasic equagiton
+        Vec3 reflectDir = calcReflectionDir(ray, surfaceNormal);
+
+        // again both uodate dir and origin
+        offsetRayOrigin(ray, surfaceNormal, 0.001f);
+        ray.direction = reflectDir;
+
+        // inside tracking same reflection doesnt go in obvs
+        return 1.0f;
+    }
+    else
     {
         // compute refr dir
-        ray.direction = calculateRefraction(ray, surfaceNormal, hitObject, refractionRatio);
+        ray.direction = calcRefractionDir(ray, surfaceNormal, refractionRatio);
         // move origin slightly inside the surface in the refracted dir
-        ray.origin = ray.hitPoint + (ray.direction * 0.01f);
+        offsetRayOrigin(ray, ray.direction, 0.001f);
 
         // update the inside objectfor next beer
         // if entering sphere record if not dont bother
-        if (!inside)
+        if (!interaction.inside)
         {
             insideObjectIndex = objectIndex;
             insideEntryPoint = ray.hitPoint;
@@ -575,29 +614,7 @@ __device__ float processTransparentRay(Ray &ray, const Object &hitObject, int ob
             insideObjectIndex = -1;
         }
 
-        // transmission = transparency * (1 - fresnel)
-        // represents energy that passes through rather than reflecting
-        // with shadow ray return full transparency bcos
-        // we alr have shadowTransmission
-        float transmissionFactor = isShadowRay
-                                       ? hitObject.material.transparency
-                                       : hitObject.material.transparency * (1.0f - fresnelValue);
-
-        return transmissionFactor;
-    }
-    else
-    {
-        // specular reflection branch primary ray only
-        // reflect ray off the surface normal
-        // clasic equagiton
-        Vec3 reflectDir = ray.direction - (surfaceNormal * (2.0f * ray.direction.dot(surfaceNormal)));
-
-        // again both uodate dir and origin
-        ray.origin = ray.hitPoint + (surfaceNormal * 0.01f);
-        ray.direction = reflectDir.normalise();
-
-        // inside tracking same reflection doesnt go in obvs
-        return hitObject.material.transparency * fresnelValue;
+        return 1.0f;
     }
 }
 
@@ -607,7 +624,7 @@ __device__ void processOpaqueRay(Ray &ray, Vec3 surfaceNormal, curandState &rng)
     // standard pracise to use diffuse bounce cosine weighted hemisphere sampling
     // im going to use the example from https://www.pbr-book.org/4ed/Sampling_Algorithms/Sampling_Multidimensional_Functions
     // adjust ray oirigin like before
-    ray.origin = ray.hitPoint + (surfaceNormal * 0.01f);
+    offsetRayOrigin(ray, surfaceNormal, 0.01f);
 
     // in real life diffuse light would scatter randomly
     // could just multiply the random two directions like theta = R1 * PI and phi = R2 * 2PI
@@ -734,13 +751,11 @@ __device__ void processOpaqueRay(Ray &ray, Vec3 surfaceNormal, curandState &rng)
 /*ADD SPECULAR LIGHT TRANSPARENT OBJ SPECULAR I THINK SURELY?*/
 __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float objectDistance, int objectIndex, curandState *rng, Vec3 surfaceNormal, BVHNode *bvhNodes, int *bvhObjects, Object *objects, Vec3 strengthOfRay)
 {
+    const int lightSamples = 4;
+
     Ray shadeRay = ray;
     shadeRay.hitPoint = shadeRay.origin + (shadeRay.direction * objectDistance);
-
-    const int lightSamples = 1;
-
-    float shadowOffset = 0.01f;
-    Vec3 shadowOrigin = shadeRay.hitPoint + (surfaceNormal * shadowOffset);
+    offsetRayOrigin(shadeRay, surfaceNormal, 0.01f);
 
     Vec3 accumulatedDiffuse = {0.0f, 0.0f, 0.0f};
     Vec3 accumulatedSpecular = {0.0f, 0.0f, 0.0f};
@@ -762,19 +777,19 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
         sampleLightPosition.z += sinf(angle) * radius;
 
         // sample as before now we get new lightpos
-        Vec3 shadowToLight = sampleLightPosition - shadowOrigin;
+        Vec3 shadowToLight = sampleLightPosition - shadeRay.origin;
         float shadowToLightDistance = shadowToLight.magnitude();
         Vec3 shadowDirection = shadowToLight * (1.0f / shadowToLightDistance);
 
         // introducing continually bouncing shadow rays werent a thing b4 basically the same tho
         Vec3 shadowTransmission = {1.0f, 1.0f, 1.0f}; // 1 ful shadow passthrough
-        Vec3 currentShadowOrigin = shadowOrigin;
+        Vec3 currentShadowOrigin = shadeRay.origin;
         float distanceRemain = shadowToLightDistance;
-        Vec3 shadowStrength = strengthOfRay;
+        Vec3 shadowStrength = {1.0f, 1.0f, 1.0f};
 
         // vars for shadow bounces
         int shadowBounces = 0;
-        const int maxShadowBounces = 6;
+        const int maxShadowBounces = 3;
         bool blocked = false;
 
         int insideObjectIndex = -1; // -1 meansn air
@@ -782,7 +797,7 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
 
         while (shadowBounces < maxShadowBounces)
         {
-            Ray shadowRay = {shadowOrigin, shadowDirection, {0.0f, 0.0f, 0.0f}};
+            Ray shadowRay = {currentShadowOrigin, shadowDirection, {0.0f, 0.0f, 0.0f}};
             float shadowHitDistance = INFINITY;
             int shadowHitObject = -1;
 
@@ -792,16 +807,46 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
             if (hitSomething && shadowHitDistance > 0.001f && shadowHitDistance < distanceRemain - 0.001f)
             {
                 Object hitObj = objects[shadowHitObject];
+                Vec3 surfaceNormal = calcSurfaceNormal(shadowRay, hitObj);
 
                 if (hitObj.material.transparency > 0.0f)
                 {
                     // set hit point ray before passing
-                    shadowRay.hitPoint = shadowOrigin + (shadowDirection * shadowHitDistance);
-                    float transmission = processTransparentRay(shadowRay, hitObj, shadowHitObject, shadowHitDistance, insideObjectIndex, insideEntryPoint, shadowStrength, *rng, true);
-                    shadowTransmission = shadowTransmission * (shadowStrength * transmission);
+                    shadowRay.hitPoint = currentShadowOrigin + (shadowDirection * shadowHitDistance);
+
+                    SurfaceInteraction interaction = computeSurfaceInteraction(shadowRay, surfaceNormal);
+                    surfaceNormal = interaction.normal;
+
+                    // also adjusts refraction ratio because its changes depending on exit / entrance
+                    float refractionRatio = interaction.inside
+                                                ? hitObj.material.refraction
+                                                : 1.0f / hitObj.material.refraction;
+
+                    applyBeerLambertAbsorption(shadowStrength, hitObj, shadowHitObject, insideObjectIndex, insideEntryPoint, shadowRay);
+
+                    shadowTransmission = shadowTransmission * shadowStrength;
+                    if (!interaction.inside)
+                    {
+                        shadowTransmission = shadowTransmission * hitObj.material.transparency;
+                    }
+                    shadowStrength = {1.0f, 1.0f, 1.0f};
+
+                    Vec3 refractDir = calcRefractionDir(shadowRay, surfaceNormal, refractionRatio);
+                    if (!interaction.inside)
+                    {
+                        insideObjectIndex = shadowHitObject;
+                        insideEntryPoint = shadowRay.hitPoint;
+                    }
+                    else
+                    {
+                        insideObjectIndex = -1;
+                    }
+
+                    shadowRay.direction = refractDir;
+                    offsetRayOrigin(shadowRay, shadowRay.direction, 0.001f);
 
                     // continue shadow ray through transparent object
-                    shadowOrigin = shadowRay.origin;
+                    currentShadowOrigin = shadowRay.origin;
                     shadowDirection = shadowRay.direction;
                     distanceRemain -= shadowHitDistance;
                     shadowBounces++;
@@ -912,7 +957,7 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
     int pixelIndex = (writeRow * screenWidth + pixelX);
     curandState rng = rngStates[pixelIndex];
 
-    const int samplesPerPixel = 1; //  from 64 for faster convergence
+    const int samplesPerPixel = 4;
 
     Vec3 postSampleColour = {0.0f, 0.0f, 0.0f};
 
@@ -935,7 +980,7 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
         // every time ray bounces its strength is reduced
         Vec3 pixelColour = {0.0f, 0.0f, 0.0f};
         Vec3 strengthOfRay = {1.0f, 1.0f, 1.0f};
-        const int maxBounce = 8;
+        const int maxBounce = 4;
 
         // beers law tracking
         int insideObjectIndex = -1; // -1 meansn air
@@ -962,25 +1007,27 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
 
                 // okay now we have to update each var depending on the results of the ray
                 // then we can calc the actual final value
-                Vec3 surfaceNormal = calcSurfaceNormal(ray, hitObject);
-                Vec3 hitColour = postShadingColour(ray, hitObject, objectDistance, objectIndex, &rng, surfaceNormal, bvhNodes, bvhObjects, objects, strengthOfRay);
-                pixelColour = pixelColour + (hitColour * strengthOfRay);
-
-                // update hitpoin surface normal ray dir making sure it runs shadeSphere with its new values
+                // update hitointl ray dir making sure it runs shadeSphere with its new values
                 Vec3 hitPoint = ray.origin + (ray.direction * objectDistance);
                 ray.hitPoint = hitPoint;
 
-                surfaceNormal = calcSurfaceNormal(ray, hitObject);
+                Vec3 surfaceNormal = calcSurfaceNormal(ray, hitObject);
 
-                if (hitObject.material.transparency > 0.0f)
+                // random branching for partial transparency
+                bool treatAsTransparent = (hitObject.material.transparency > 0.0f) &&
+                                          (curand_uniform(&rng) < hitObject.material.transparency);
+
+                if (treatAsTransparent)
                 {
-                    // func mutates strengthOfRay in place with beer absorp
-                    // then returns the fresnel transp transmission factor separately
-                    float transmission = processTransparentRay(ray, hitObject, objectIndex, objectDistance, insideObjectIndex, insideEntryPoint, strengthOfRay, rng);
-                    strengthOfRay = strengthOfRay * transmission;
+                    // func mutates strengthOfRay in place with beer absorp and leaves
+                    // the ray strength untouched so transmission stays visible
+                    processTransparentRay(ray, hitObject, objectIndex, objectDistance, insideObjectIndex, insideEntryPoint, strengthOfRay, rng, surfaceNormal);
                 }
-                else
+                else // otherwise treat as opaque
                 {
+                    Vec3 hitColour = postShadingColour(ray, hitObject, objectDistance, objectIndex, &rng, surfaceNormal, bvhNodes, bvhObjects, objects, strengthOfRay);
+                    pixelColour = pixelColour + (hitColour * strengthOfRay);
+
                     // calcs via opaque ray function simples the code
                     processOpaqueRay(ray, surfaceNormal, rng);
                     strengthOfRay = strengthOfRay * hitObject.material.colour;
@@ -1084,7 +1131,7 @@ void initScene()
     Material greenWall = {{0.10f, 0.65f, 0.10f}, 0.30f, 0.70f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
     Material lightFixtureMaterial = {{1.0f, 1.0f, 1.0f}, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {15.0f, 15.0f, 14.0f}};
     Material sphereBlue = {{0.2f, 0.2f, 0.8f}, 0.35f, 0.75f, 0.05f, 64.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
-    Material sphereGlass = {{0.9f, 0.9f, 0.9f}, 0.0f, 0.0f, 0.95f, 64.0f, 1.0f, 1.5f, {0.05f, 0.1f, 0.1f}, {0.0f, 0.0f, 0.0f}};
+    Material sphereGlass = {{0.9f, 0.9f, 0.9f}, 0.35f, 0.75f, 0.95f, 64.0f, 1.0f, 1.5f, {0.05f, 0.1f, 0.1f}, {0.0f, 0.0f, 0.0f}};
 
     // lighting fixture
     addQuadAsTwoTriangles(

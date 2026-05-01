@@ -3,7 +3,7 @@
 #include <GLFW/glfw3.h>
 #include <fstream>
 #include <sstream>
-#include <raytracer.h>
+#include "raytracer.h"
 
 // seperated the shader read file compiling and all other host cpp code into a seprate file was causing many issues when trying to boot the ray tracer
 // seperating the code makes it much easier and probably i think more efficient as the cuda compiler was having to deal with
@@ -162,9 +162,9 @@ int main()
     // move the calculation of host pixel buffer solely with cpp
     unsigned char *hostPixels = new unsigned char[screenWidth * screenHeight * 4];
     initDevicePixel(screenWidth, screenHeight);
-    // moved scene init to host 
+    // moved scene init to host
     initScene();
-    float statsTimer = 0.0f; 
+    float statsTimer = 0.0f;
 
     while (!glfwWindowShouldClose(win))
     {
@@ -204,7 +204,7 @@ int main()
         {
             char title[64];
             // stores it in a suitabke buffer
-            snprintf(title, sizeof(title) ,"CUDA Ray Tracer | FPS: %6.0f | Frame: %6.2fms | GPU: %6.2fms" , fps, totalMs, gpuMs);
+            snprintf(title, sizeof(title), "CUDA Ray Tracer | FPS: %6.0f | Frame: %6.2fms | GPU: %6.2fms", fps, totalMs, gpuMs);
             glfwSetWindowTitle(win, title);
             statsTimer = 0.0f;
         }
