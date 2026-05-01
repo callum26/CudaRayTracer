@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run raytracer",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\build\\Release\\rayTracer.exe",
+      "cwd": "${workspaceFolder}\\build",
+      "preLaunchTask": "build raytracer",
+      "console": "integratedTerminal"
+    }
+  ]
+}

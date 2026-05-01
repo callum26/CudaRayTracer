@@ -1,0 +1,19 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build raytracer",
+      "type": "shell",
+      "command": "cmd.exe",
+      "args": [
+        "/c",
+        "\"${workspaceFolder}\\build.bat\""
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}
