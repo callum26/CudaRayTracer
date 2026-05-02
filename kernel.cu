@@ -15,6 +15,7 @@ __constant__ Light light;
 __constant__ int objectCount;
 __constant__ int bvhRootIndex;
 __constant__ int bvhNodeCount;
+__constant__ Material deviceMaterials;
 
 // device pixels declared frist point to empty memory additionressi in gpu
 static uchar4 *devicePixels = nullptr;
@@ -304,7 +305,7 @@ __device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BV
     // pinc to store current node on stack
     stack[stackPtr++] = bvhRootIndex;
 
-    // nearest hit found none rn
+    // A
     float closest = INFINITY;
     int closestIdx = -1; // wich obj clostest
 
@@ -384,6 +385,81 @@ __device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BV
     return false;
 }
 
+__device__ bool rayCastShadowBVH(const Ray &ray, float &hitDistance, int &objectIndex, BVHNode *bvhNodes, int *bvhObjects, Object *objects, float maxDist)
+{
+    // we will use a depth first search to travese the tree
+    // stack to store which nodes visted
+    int stack[32];
+    int stackPtr = 0;
+    // pinc to store current node on stack
+    stack[stackPtr++] = bvhRootIndex;
+
+    // keep going till stack empty
+    while (stackPtr > 0)
+    {
+        // pop node from stack pdec then get value
+        int nodeIdx = stack[--stackPtr];
+
+        // only continue if check bounds node not negative or past node count
+        if (nodeIdx < 0 || nodeIdx >= bvhNodeCount)
+            continue;
+
+        // fetch node from array bvhNodes using current node index
+        BVHNode node = bvhNodes[nodeIdx];
+
+        // as shadow if any thing hit then must of hit object shadow ray
+        if (!hitAABB(ray, node.box, maxDist))
+            continue;
+
+        // if more than 0 objs in node
+        if (node.objectCount > 0)
+        {
+            // runs through all objs in leaf
+            for (int i = 0; i < node.objectCount; i++)
+            {
+                // gets object index from list of all bvhObjects
+                // the way it works
+                // e.g. leaf node contains 3 objs so node.objectCount = 3
+                // node.firstObject is the pos in bvhObjects where the objs within this specific node are stored
+                // lets say  node.firstObject = 4
+                // bcos there are 3 objs this leaf needs pos 4,5,6 for all 3 objs within the bvhObjects array
+                // as it iterates through the object count in our case 0,1,2
+                // node.firstObject is added with each of our i
+                // giving the ids of 4,5,6 which is what we need
+                int objIdx = bvhObjects[node.firstObject + i];
+
+                //  then do normal ray interset with each obj within the box
+                float dist = INFINITY;
+                // split into two funcs one for tri and one for sphere easier to check for object type then within one equation
+                bool hit = objects[objIdx].type == triangleObject
+                               ? rayIntersectTriangle(ray, objects[objIdx], dist)
+                               : rayIntersectSphere(ray, objects[objIdx], dist);
+
+                // then check that bool instead
+                if (hit && dist > 0.001f && dist < maxDist)
+                {
+                    hitDistance = dist;
+                    objectIndex = objIdx;
+                    return true;
+                }
+            }
+        }
+        // push children
+        else // not leaf node it has up to two children
+        {
+            // LIFO so do right child first pushed first popped last
+            // if righ child push rightIndex onto stack
+            if (node.rightIndex >= 0)
+                stack[stackPtr++] = node.rightIndex;
+            // if left child push leftIndex onto stack
+            if (node.leftIndex >= 0)
+                stack[stackPtr++] = node.leftIndex;
+        }
+    }
+    // ifnot no obj hit
+    return false;
+}
+
 // surfaceNormal - normalised direction vector of a vector perpendicular to surface on that point
 __device__ Vec3 calcSurfaceNormal(const Ray &ray, const Object &object)
 {
@@ -399,10 +475,7 @@ __device__ Vec3 calcSurfaceNormal(const Ray &ray, const Object &object)
     }
     else if (object.type == triangleObject)
     {
-        // cross product of E2 X E1 to get the normal
-        Vec3 edge1 = object.v1 - object.v0;
-        Vec3 edge2 = object.v2 - object.v0;
-        surfaceNormal = edge2.cross(edge1).normalise();
+        return object.normal;
     }
     else
     {
@@ -751,7 +824,7 @@ __device__ void processOpaqueRay(Ray &ray, Vec3 surfaceNormal, curandState &rng)
 /*ADD SPECULAR LIGHT TRANSPARENT OBJ SPECULAR I THINK SURELY?*/
 __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float objectDistance, int objectIndex, curandState *rng, Vec3 surfaceNormal, BVHNode *bvhNodes, int *bvhObjects, Object *objects, Vec3 strengthOfRay)
 {
-    const int lightSamples = 4;
+    const int lightSamples = 1;
 
     Ray shadeRay = ray;
     shadeRay.hitPoint = shadeRay.origin + (shadeRay.direction * objectDistance);
@@ -801,7 +874,7 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
             float shadowHitDistance = INFINITY;
             int shadowHitObject = -1;
 
-            bool hitSomething = rayCastBVH(shadowRay, shadowHitDistance, shadowHitObject, bvhNodes, bvhObjects, objects);
+            bool hitSomething = rayCastShadowBVH(shadowRay, shadowHitDistance, shadowHitObject, bvhNodes, bvhObjects, objects, distanceRemain);
 
             // check if we hit an object before reaching the light
             if (hitSomething && shadowHitDistance > 0.001f && shadowHitDistance < distanceRemain - 0.001f)
@@ -957,7 +1030,7 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
     int pixelIndex = (writeRow * screenWidth + pixelX);
     curandState rng = rngStates[pixelIndex];
 
-    const int samplesPerPixel = 4;
+    const int samplesPerPixel = 1;
 
     Vec3 postSampleColour = {0.0f, 0.0f, 0.0f};
 
@@ -1038,13 +1111,6 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
                     break;
                 }
             }
-            else
-            {
-                // no object hit fallback
-                Vec3 hitColour = {0.08f, 0.08f, 0.08f};
-                pixelColour = pixelColour + (hitColour * strengthOfRay);
-                break;
-            }
         }
         postSampleColour = postSampleColour + pixelColour;
     }
@@ -1094,6 +1160,12 @@ inline void addTriangle(Object *objects, int &objectCount, const Vec3 &v0, const
     objects[objectCount].v2 = v2;
     objects[objectCount].material = mat;
     objects[objectCount].type = triangleObject;
+
+    // saves calculating later itll never change
+    Vec3 edge1 = object.v1 - object.v0;
+    Vec3 edge2 = object.v2 - object.v0;
+    objects[objectCount].normal = edge2.cross(edge1).normalise();
+
     objectCount++;
 }
 
@@ -1115,11 +1187,11 @@ void initScene()
 {
     Light Hlight = {
         {0.0f, 2.75f, -5.0f},  // position
-        {0.35f, 0.35f, 0.32f}, // ambientIntensity
-        {1.0f, 0.98f, 0.88f},  // diffuseIntensity
+        {0.35f, 0.30f, 0.20f}, // ambientIntensity
+        {1.0f, 0.85f, 0.60f},  // diffuseIntensity
         {0.5f, 0.5f, 0.5f},    // specularIntensity
         10.0f,                 // lightIntensity
-        0.55f                  // lightradiuys
+        1.2f                   // lightradiuys
     };
 
     Object Hobjects[64];
@@ -1130,7 +1202,7 @@ void initScene()
     Material redWall = {{0.75f, 0.10f, 0.10f}, 0.30f, 0.70f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
     Material greenWall = {{0.10f, 0.65f, 0.10f}, 0.30f, 0.70f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
     Material lightFixtureMaterial = {{1.0f, 1.0f, 1.0f}, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {15.0f, 15.0f, 14.0f}};
-    Material sphereBlue = {{0.2f, 0.2f, 0.8f}, 0.35f, 0.75f, 0.05f, 64.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
+    Material sphereBlue = {{0.2f, 0.2f, 0.8f}, 0.35f, 0.75f, 0.02f, 10.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
     Material sphereGlass = {{0.9f, 0.9f, 0.9f}, 0.35f, 0.75f, 0.95f, 64.0f, 1.0f, 1.5f, {0.05f, 0.1f, 0.1f}, {0.0f, 0.0f, 0.0f}};
 
     // lighting fixture

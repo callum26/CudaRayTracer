@@ -131,6 +131,7 @@ struct Object
 
     float radius;
     Vec3 v0, v1, v2;
+    Vec3 normal;
 };
 
 struct Ray
