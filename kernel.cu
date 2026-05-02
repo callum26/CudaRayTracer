@@ -15,7 +15,6 @@ __constant__ Light light;
 __constant__ int objectCount;
 __constant__ int bvhRootIndex;
 __constant__ int bvhNodeCount;
-__constant__ Material deviceMaterials;
 
 // device pixels declared frist point to empty memory additionressi in gpu
 static uchar4 *devicePixels = nullptr;
@@ -38,7 +37,7 @@ static int currentFrame = 0;
 // Direction (ray.direction)
 // t = distance from point of intersection to origin of the ray
 // find value of t (if intersects) use it to find the point of intersect with spehere
-__device__ bool rayIntersectSphere(const Ray &ray, const Object &object, float &distance)
+__device__ bool rayIntersectSphere(const Ray &ray, const Sphere &sphere, float &distance)
 {
     // implicit equation of sphere w/ radius r centred at C = 0,0,0
     // given by (x-x0)^2 + (y-y0)^2 + (z-z0)^2 = r^2
@@ -56,8 +55,8 @@ __device__ bool rayIntersectSphere(const Ray &ray, const Object &object, float &
     // O - C is the vector to get from sphere center to ray origin
     // in doc they refer to it as L = O - C
 
-    // L = ray.origin - object.position
-    Vec3 sphereToOrigin = ray.origin - object.position;
+    // L = ray.origin - sphere.position
+    Vec3 sphereToOrigin = ray.origin - sphere.position;
 
     // subsitute into equation
     // (L + tD) . (L + tD) = r^2
@@ -91,7 +90,7 @@ __device__ bool rayIntersectSphere(const Ray &ray, const Object &object, float &
 
     // c = L . L - r^2
     // dot sphereToOrigin with itself subtract sphere radius sphere to make sure its equal to zero explained below
-    float c = sphereToOrigin.dot(sphereToOrigin) - (object.radius * object.radius);
+    float c = sphereToOrigin.dot(sphereToOrigin) - (sphere.radius * sphere.radius);
 
     // x = (-b (+/-) sqr(b^2 - 4ac)) / 2a
 
@@ -141,7 +140,7 @@ __device__ bool rayIntersectSphere(const Ray &ray, const Object &object, float &
     return false;
 }
 
-__device__ bool rayIntersectTriangle(const Ray &ray, const Object &object, float &distance)
+__device__ bool rayIntersectTriangle(const Ray &ray, const Triangle &triangle, float &distance)
 {
     // using Moller Trumbore triangle intersection
     // https://cadxfem.org/inf/Fast%20MinimumStorage%20RayTriangle%20Intersection.pdf
@@ -258,10 +257,10 @@ __device__ bool rayIntersectTriangle(const Ray &ray, const Object &object, float
 
     // D ray direction
     // both edges of the triangle
-    Vec3 edge1 = object.v1 - object.v0;
-    Vec3 edge2 = object.v2 - object.v0;
+    Vec3 edge1 = triangle.v1 - triangle.v0;
+    Vec3 edge2 = triangle.v2 - triangle.v0;
 
-    Vec3 T = ray.origin - object.v0;
+    Vec3 T = ray.origin - triangle.v0;
     /* COME UP WITH BETTER VAR NAMES LATER*/
     Vec3 P = ray.direction.cross(edge2);
     Vec3 Q = T.cross(edge1);
@@ -346,7 +345,9 @@ __device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BV
                 //  then do normal ray interset with each obj within the box
                 float dist = INFINITY;
                 // split into two funcs one for tri and one for sphere easier to check for object type then within one equation
-                bool objectRayIntersect = objects[objIdx].type == triangleObject ? rayIntersectTriangle(ray, objects[objIdx], dist) : rayIntersectSphere(ray, objects[objIdx], dist);
+                bool objectRayIntersect = objects[objIdx].type == triangleObject
+                                              ? rayIntersectTriangle(ray, objects[objIdx].triangle, dist)
+                                              : rayIntersectSphere(ray, objects[objIdx].sphere, dist);
 
                 // then check that bool instead
                 if (objectRayIntersect)
@@ -432,8 +433,8 @@ __device__ bool rayCastShadowBVH(const Ray &ray, float &hitDistance, int &object
                 float dist = INFINITY;
                 // split into two funcs one for tri and one for sphere easier to check for object type then within one equation
                 bool hit = objects[objIdx].type == triangleObject
-                               ? rayIntersectTriangle(ray, objects[objIdx], dist)
-                               : rayIntersectSphere(ray, objects[objIdx], dist);
+                               ? rayIntersectTriangle(ray, objects[objIdx].triangle, dist)
+                               : rayIntersectSphere(ray, objects[objIdx].sphere, dist);
 
                 // then check that bool instead
                 if (hit && dist > 0.001f && dist < maxDist)
@@ -461,28 +462,20 @@ __device__ bool rayCastShadowBVH(const Ray &ray, float &hitDistance, int &object
 }
 
 // surfaceNormal - normalised direction vector of a vector perpendicular to surface on that point
+__device__ Vec3 calcSurfaceNormal(const Ray &ray, const Sphere &sphere)
+{
+    return (ray.hitPoint - sphere.position).normalise();
+}
+
+__device__ Vec3 calcSurfaceNormal(const Ray &, const Triangle &triangle)
+{
+    return triangle.normal;
+}
+// returns respective surface normal based on functions type inputed
 __device__ Vec3 calcSurfaceNormal(const Ray &ray, const Object &object)
 {
-    // for sphere it is vector from centre of the sphere pointing outwards
-    // beginning at hitPoint subtract by centre to get vector from centre to hit point
-    // now gonna update surface normal as goes instead of returning it multiple times
-    Vec3 surfaceNormal;
-
-    if (object.type == sphereObject)
-    {
-        // normalising getting direction vector
-        surfaceNormal = (ray.hitPoint - object.position).normalise();
-    }
-    else if (object.type == triangleObject)
-    {
-        return object.normal;
-    }
-    else
-    {
-        return {0.0f, 1.0f, 0.0f}; // facllback
-    }
-
-    return surfaceNormal;
+    return object.type == sphereObject ? calcSurfaceNormal(ray, object.sphere)
+                                       : calcSurfaceNormal(ray, object.triangle);
 }
 
 // must be executed on the set of all light soruces
@@ -525,7 +518,7 @@ __device__ void calcLighting(const Ray &ray, const Light &light, float distanceT
 }
 
 // refraction ray direction
-__device__ Vec3 calcRefractionDir(const Ray &ray, const Vec3 &surfaceNormal, const float &refractionIndex)
+__device__ Vec3 refractDir(const Ray &ray, const Vec3 &surfaceNormal, const float &refractionIndex)
 {
     // using snells law in vectorised from
     // T = nI + (nc1 - sqrt(1-n^2(1-c1^2)))N
@@ -558,7 +551,7 @@ __device__ Vec3 calcRefractionDir(const Ray &ray, const Vec3 &surfaceNormal, con
 }
 
 // reflected ray direction
-__device__ Vec3 calcReflectionDir(const Ray &ray, const Vec3 &surfaceNormal)
+__device__ Vec3 reflectDir(const Ray &ray, const Vec3 &surfaceNormal)
 {
     // R = I - 2N(I . N)
     // R reflected ray
@@ -659,7 +652,7 @@ __device__ float processTransparentRay(Ray &ray, const Object &hitObject, int ob
         // specular reflection branch primary ray only
         // reflect ray off the surface normal
         // clasic equagiton
-        Vec3 reflectDir = calcReflectionDir(ray, surfaceNormal);
+        Vec3 reflectDir = reflectDir(ray, surfaceNormal);
 
         // again both uodate dir and origin
         offsetRayOrigin(ray, surfaceNormal, 0.001f);
@@ -671,7 +664,7 @@ __device__ float processTransparentRay(Ray &ray, const Object &hitObject, int ob
     else
     {
         // compute refr dir
-        ray.direction = calcRefractionDir(ray, surfaceNormal, refractionRatio);
+        ray.direction = refractDir(ray, surfaceNormal, refractionRatio);
         // move origin slightly inside the surface in the refracted dir
         offsetRayOrigin(ray, ray.direction, 0.001f);
 
@@ -904,7 +897,7 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
                     }
                     shadowStrength = {1.0f, 1.0f, 1.0f};
 
-                    Vec3 refractDir = calcRefractionDir(shadowRay, surfaceNormal, refractionRatio);
+                    Vec3 refractDir = refractDir(shadowRay, surfaceNormal, refractionRatio);
                     if (!interaction.inside)
                     {
                         insideObjectIndex = shadowHitObject;
@@ -1146,25 +1139,25 @@ void freeDevicePixels()
 
 inline void addSphere(Object *objects, int &objectCount, const Vec3 &pos, const Material &mat, const float &radius)
 {
-    objects[objectCount].position = pos;
+    objects[objectCount].sphere.position = pos;
     objects[objectCount].material = mat;
     objects[objectCount].type = sphereObject;
-    objects[objectCount].radius = radius;
+    objects[objectCount].sphere.radius = radius;
     objectCount++;
 }
 
 inline void addTriangle(Object *objects, int &objectCount, const Vec3 &v0, const Vec3 &v1, const Vec3 &v2, const Material &mat)
 {
-    objects[objectCount].v0 = v0;
-    objects[objectCount].v1 = v1;
-    objects[objectCount].v2 = v2;
+    objects[objectCount].triangle.v0 = v0;
+    objects[objectCount].triangle.v1 = v1;
+    objects[objectCount].triangle.v2 = v2;
     objects[objectCount].material = mat;
     objects[objectCount].type = triangleObject;
 
     // saves calculating later itll never change
-    Vec3 edge1 = object.v1 - object.v0;
-    Vec3 edge2 = object.v2 - object.v0;
-    objects[objectCount].normal = edge2.cross(edge1).normalise();
+    Vec3 edge1 = objects[objectCount].triangle.v1 - objects[objectCount].triangle.v0;
+    Vec3 edge2 = objects[objectCount].triangle.v2 - objects[objectCount].triangle.v0;
+    objects[objectCount].triangle.normal = edge2.cross(edge1).normalise();
 
     objectCount++;
 }

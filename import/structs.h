@@ -122,16 +122,27 @@ enum ObjectType
     triangleObject
 };
 
-/* CHANGE RADIUS AND NORMAL SO ITS SEPERATE MAYBE SPLIT OBJECT INTO SPHERE GROUND STRUCTS idk*/
-struct Object
+struct Sphere
 {
     Vec3 position;
-    Material material;
-    ObjectType type;
-
     float radius;
+};
+
+struct Triangle
+{
     Vec3 v0, v1, v2;
     Vec3 normal;
+};
+
+struct Object
+{
+    Material material;
+    ObjectType type;
+    union
+    {
+        Sphere sphere;
+        Triangle triangle;
+    };
 };
 
 struct Ray
