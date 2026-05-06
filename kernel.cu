@@ -652,11 +652,11 @@ __device__ float processTransparentRay(Ray &ray, const Object &hitObject, int ob
         // specular reflection branch primary ray only
         // reflect ray off the surface normal
         // clasic equagiton
-        Vec3 reflectDir = reflectDir(ray, surfaceNormal);
+        Vec3 refractDirection = reflectDir(ray, surfaceNormal);
 
         // again both uodate dir and origin
         offsetRayOrigin(ray, surfaceNormal, 0.001f);
-        ray.direction = reflectDir;
+        ray.direction = refractDirection;
 
         // inside tracking same reflection doesnt go in obvs
         return 1.0f;
@@ -897,7 +897,7 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
                     }
                     shadowStrength = {1.0f, 1.0f, 1.0f};
 
-                    Vec3 refractDir = refractDir(shadowRay, surfaceNormal, refractionRatio);
+                    Vec3 refractDirection = refractDir(shadowRay, surfaceNormal, refractionRatio);
                     if (!interaction.inside)
                     {
                         insideObjectIndex = shadowHitObject;
@@ -908,7 +908,7 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
                         insideObjectIndex = -1;
                     }
 
-                    shadowRay.direction = refractDir;
+                    shadowRay.direction = refractDirection;
                     offsetRayOrigin(shadowRay, shadowRay.direction, 0.001f);
 
                     // continue shadow ray through transparent object
@@ -944,12 +944,11 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
     }
 
     // Ip = ka * ia + Sum (of all light soruces)(kd * (Lm . N)* im,d + ks * (Rm . V)^a * im,s))
-    Vec3 finalAmbient = light.ambientIntensity * object.material.ambientReflectivity;
     float invLightSamples = (1.0f / (float)lightSamples);
     Vec3 finalDiffuse = accumulatedDiffuse * invLightSamples;
     Vec3 finalSpecular = accumulatedSpecular * invLightSamples;
 
-    return ((finalAmbient + finalDiffuse) * object.material.colour) + finalSpecular;
+    return (finalDiffuse * object.material.colour) + finalSpecular;
 }
 
 __global__ void initRNGKernel(curandState *states, int width, int height)
@@ -1179,30 +1178,35 @@ inline void addQuadAsTwoTriangles(Object *objects, int &objectCount, const Vec3 
 void initScene()
 {
     Light Hlight = {
-        {0.0f, 2.75f, -5.0f},  // position
-        {0.35f, 0.30f, 0.20f}, // ambientIntensity
-        {1.0f, 0.85f, 0.60f},  // diffuseIntensity
-        {0.5f, 0.5f, 0.5f},    // specularIntensity
-        10.0f,                 // lightIntensity
-        1.2f                   // lightradiuys
+        {0.0f, 2.95f, -5.0f},  // position
+        {0.20f, 0.18f, 0.14f}, // ambientIntensity
+        {1.0f, 0.92f, 0.78f},  // diffuseIntensity
+        {1.0f, 0.95f, 0.85f},  // specularIntensity
+        14.0f,                 // lightIntensity
+        0.9f                   // lightRadius
     };
 
     Object Hobjects[64];
     int HobjectCount = 0;
 
     /*EXPLAIN THESE LATER TEST DATA*/
-    Material whiteWall = {{0.85f, 0.85f, 0.85f}, 0.35f, 0.75f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
-    Material redWall = {{0.75f, 0.10f, 0.10f}, 0.30f, 0.70f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
-    Material greenWall = {{0.10f, 0.65f, 0.10f}, 0.30f, 0.70f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
-    Material lightFixtureMaterial = {{1.0f, 1.0f, 1.0f}, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {15.0f, 15.0f, 14.0f}};
-    Material sphereBlue = {{0.2f, 0.2f, 0.8f}, 0.35f, 0.75f, 0.02f, 10.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
-    Material sphereGlass = {{0.9f, 0.9f, 0.9f}, 0.35f, 0.75f, 0.95f, 64.0f, 1.0f, 1.5f, {0.05f, 0.1f, 0.1f}, {0.0f, 0.0f, 0.0f}};
-
+    Material whiteWall = {{0.82f, 0.82f, 0.80f}, 0.30f, 0.78f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
+    Material redWall = {{0.65f, 0.07f, 0.07f}, 0.28f, 0.72f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
+    Material greenWall = {{0.10f, 0.48f, 0.10f}, 0.28f, 0.72f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
+    Material lightFixtureMaterial = {{1.0f, 1.0f, 1.0f}, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {18.0f, 16.0f, 13.0f}};
+    // three showcase spheres
+    // saturated diffuse
+    Material sphereDiffuse = {{0.08f, 0.15f, 0.88f}, 0.35f, 0.85f, 0.05f, 24.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
+    // clear glass
+    Material sphereGlass = {{0.98f, 0.98f, 0.98f}, 0.05f, 0.10f, 0.95f, 128.0f, 1.0f, 1.52f, {0.015f, 0.015f, 0.015f}, {0.0f, 0.0f, 0.0f}};
+    // amber tinted glass
+    Material sphereAmber = {{0.98f, 0.98f, 0.98f}, 0.05f, 0.10f, 0.95f, 128.0f, 1.0f, 1.45f, {0.08f, 0.40f, 0.95f}, {0.0f, 0.0f, 0.0f}};
     // lighting fixture
     addQuadAsTwoTriangles(
         Hobjects, HobjectCount,
-        {-0.5f, 2.999f, -5.5f}, {-0.5f, 2.999f, -4.5f},
-        {0.5f, 2.999f, -4.5f}, {0.5f, 2.999f, -5.5f}, lightFixtureMaterial);
+        {-0.8f, 2.999f, -5.8f}, {-0.8f, 2.999f, -4.2f},
+        {0.8f, 2.999f, -4.2f}, {0.8f, 2.999f, -5.8f},
+        lightFixtureMaterial);
 
     // back wall
     addQuadAsTwoTriangles(
@@ -1248,11 +1252,15 @@ void initScene()
 
     addSphere(
         Hobjects, HobjectCount,
-        {-1.0f, -1.5f, -6.0f}, sphereBlue, 1.0f);
+        {-1.25f, -2.0f, -6.2f}, sphereDiffuse, 1.0f);
 
     addSphere(
         Hobjects, HobjectCount,
-        {1.45f, -1.5f, -4.5f}, sphereGlass, 1.0f);
+        {1.30f, -1.20f, -5.10f}, sphereGlass, 0.8f);
+
+    addSphere(
+        Hobjects, HobjectCount,
+        {-0.55f, -2.50f, -3.70f}, sphereAmber, 0.50f);
 
     // build bvh
     BuildObject buildObject[64];

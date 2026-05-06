@@ -20,26 +20,28 @@ __host__ __device__ AABB boundsOf(const Object &object)
     AABB box;
     if (object.type == sphereObject)
     {
+        Sphere sphere = object.sphere;
         // we can use radius of sphere to calc the bounding box
-        Vec3 radius = {object.radius, object.radius, object.radius};
+        Vec3 radius = {sphere.radius, sphere.radius, sphere.radius};
         // object.pos is centre of object so subtracting or adding of the radius is gonna give the edges
         // around the sphere, which is the bounding box coords
-        box.boxMin = object.position - radius;
-        box.boxMax = object.position + radius;
+        box.boxMin = sphere.position - radius;
+        box.boxMax = sphere.position + radius;
     }
     else
     {
+        Triangle triangle = object.triangle;
         // for triangle
         // taking the minimum of each verticies for every coord
         box.boxMin = {
-            fminf(object.v0.x, fminf(object.v1.x, object.v2.x)),
-            fminf(object.v0.y, fminf(object.v1.y, object.v2.y)),
-            fminf(object.v0.z, fminf(object.v1.z, object.v2.z))};
+            fminf(triangle.v0.x, fminf(triangle.v1.x, triangle.v2.x)),
+            fminf(triangle.v0.y, fminf(triangle.v1.y, triangle.v2.y)),
+            fminf(triangle.v0.z, fminf(triangle.v1.z, triangle.v2.z))};
         // taking the max of each verticies for every coord
         box.boxMax = {
-            fmaxf(object.v0.x, fmaxf(object.v1.x, object.v2.x)),
-            fmaxf(object.v0.y, fmaxf(object.v1.y, object.v2.y)),
-            fmaxf(object.v0.z, fmaxf(object.v1.z, object.v2.z))};
+            fmaxf(triangle.v0.x, fmaxf(triangle.v1.x, triangle.v2.x)),
+            fmaxf(triangle.v0.y, fmaxf(triangle.v1.y, triangle.v2.y)),
+            fmaxf(triangle.v0.z, fmaxf(triangle.v1.z, triangle.v2.z))};
         // creating easy bounding box
     }
     return box;
