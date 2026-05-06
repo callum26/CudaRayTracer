@@ -386,6 +386,66 @@ __device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BV
     return false;
 }
 
+// og code for testing old brute force
+__device__ bool rayCastObjects(const Ray &ray, float &distance, int &objectIndex, Object *objects)
+{
+    float closest = INFINITY;
+    int closestIdx = -1;
+
+    for (int i = 0; i < objectCount; i++)
+    {
+        float dist = INFINITY;
+        bool objectRayIntersect = objects[i].type == triangleObject
+                                      ? rayIntersectTriangle(ray, objects[i].triangle, dist)
+                                      : rayIntersectSphere(ray, objects[i].sphere, dist);
+
+        if (objectRayIntersect && dist < closest)
+        {
+            closest = dist;
+            closestIdx = i;
+        }
+    }
+
+    if (closestIdx >= 0)
+    {
+        distance = closest;
+        objectIndex = closestIdx;
+        return true;
+    }
+
+    return false;
+}
+
+// og code for testing old brute force shadow
+__device__ bool rayCastShadowObjects(const Ray &ray, float &hitDistance, int &objectIndex, Object *objects, float maxDist)
+{
+    float closest = INFINITY;
+    int closestIdx = -1;
+
+    for (int i = 0; i < objectCount; i++)
+    {
+        float dist = INFINITY;
+        bool hit = objects[i].type == triangleObject
+                       ? rayIntersectTriangle(ray, objects[i].triangle, dist)
+                       : rayIntersectSphere(ray, objects[i].sphere, dist);
+
+        if (hit && dist > 0.001f && dist < maxDist && dist < closest)
+        {
+            closest = dist;
+            closestIdx = i;
+        }
+    }
+
+    if (closestIdx >= 0)
+    {
+        hitDistance = closest;
+        objectIndex = closestIdx;
+        return true;
+    }
+
+    return false;
+}
+
 __device__ bool rayCastShadowBVH(const Ray &ray, float &hitDistance, int &objectIndex, BVHNode *bvhNodes, int *bvhObjects, Object *objects, float maxDist)
 {
     // we will use a depth first search to travese the tree
@@ -811,11 +871,12 @@ __device__ void processOpaqueRay(Ray &ray, Vec3 surfaceNormal, curandState &rng)
     // N - surface normal
 
     // putting that all in we get
+    // dont have to normalise already unit vector
     ray.direction = (tangent * (cosf(phi) * sinTheta) + bitangent * (sinf(phi) * sinTheta) + surfaceNormal * cosTheta).normalise();
 }
 
 /*ADD SPECULAR LIGHT TRANSPARENT OBJ SPECULAR I THINK SURELY?*/
-__device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float objectDistance, int objectIndex, curandState *rng, Vec3 surfaceNormal, BVHNode *bvhNodes, int *bvhObjects, Object *objects, Vec3 strengthOfRay)
+__device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float objectDistance, int objectIndex, curandState *rng, Vec3 surfaceNormal, BVHNode *bvhNodes, int *bvhObjects, Object *objects, Vec3 strengthOfRay, bool useBVH)
 {
     const int lightSamples = 1;
 
@@ -867,7 +928,9 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
             float shadowHitDistance = INFINITY;
             int shadowHitObject = -1;
 
-            bool hitSomething = rayCastShadowBVH(shadowRay, shadowHitDistance, shadowHitObject, bvhNodes, bvhObjects, objects, distanceRemain);
+            bool hitSomething = useBVH
+                                    ? rayCastShadowBVH(shadowRay, shadowHitDistance, shadowHitObject, bvhNodes, bvhObjects, objects, distanceRemain)
+                                    : rayCastShadowObjects(shadowRay, shadowHitDistance, shadowHitObject, objects, distanceRemain);
 
             // check if we hit an object before reaching the light
             if (hitSomething && shadowHitDistance > 0.001f && shadowHitDistance < distanceRemain - 0.001f)
@@ -1005,7 +1068,7 @@ __device__ uchar4 toneMappedPixel(Vec3 *accumulation, int pixelIndex, int frameI
     return make_uchar4(finalR, finalG, finalB, 255);
 }
 
-__global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accumulation, int frameIndex, int screenWidth, int screenHeight, BVHNode *bvhNodes, int *bvhObjects, Object *objects)
+__global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accumulation, int frameIndex, int screenWidth, int screenHeight, BVHNode *bvhNodes, int *bvhObjects, Object *objects, bool useBVH)
 {
     int pixelX = blockIdx.x * blockDim.x + threadIdx.x;
     int pixelY = blockIdx.y * blockDim.y + threadIdx.y;
@@ -1056,7 +1119,10 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
             float objectDistance = INFINITY;
             int objectIndex = -1;
 
-            rayCastBVH(ray, objectDistance, objectIndex, bvhNodes, bvhObjects, objects);
+            if (useBVH)
+                rayCastBVH(ray, objectDistance, objectIndex, bvhNodes, bvhObjects, objects);
+            else
+                rayCastObjects(ray, objectDistance, objectIndex, objects);
 
             // they both also update their value for their respective distances whenever they run and return true
             if (objectIndex != -1)
@@ -1090,7 +1156,7 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
                 }
                 else // otherwise treat as opaque
                 {
-                    Vec3 hitColour = postShadingColour(ray, hitObject, objectDistance, objectIndex, &rng, surfaceNormal, bvhNodes, bvhObjects, objects, strengthOfRay);
+                    Vec3 hitColour = postShadingColour(ray, hitObject, objectDistance, objectIndex, &rng, surfaceNormal, bvhNodes, bvhObjects, objects, strengthOfRay, useBVH);
                     pixelColour = pixelColour + (hitColour * strengthOfRay);
 
                     // calcs via opaque ray function simples the code
@@ -1303,7 +1369,7 @@ void initScene()
     cudaMemcpyToSymbol(objectCount, &HobjectCount, sizeof(int));
 }
 
-float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight)
+float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight, bool useBVH)
 {
     // https://developer.nvidia.com/blog/how-implement-performance-metrics-cuda-cc/
     // as mentioned on the nvidia blog its better to use the inbuilt functions for timings in cuda instead of cpu itmings
@@ -1325,7 +1391,7 @@ float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight)
 
     // begins once the kernel is launch
     cudaEventRecord(start);
-    renderKernel<<<gridSize, blockSize>>>(devicePixels, deviceRngStates, deviceAccumulation, frameIndex, screenWidth, screenHeight, deviceBvhNodes, deviceBvhObjects, deviceObjects);
+    renderKernel<<<gridSize, blockSize>>>(devicePixels, deviceRngStates, deviceAccumulation, frameIndex, screenWidth, screenHeight, deviceBvhNodes, deviceBvhObjects, deviceObjects, useBVH);
     cudaEventRecord(stop);
 
     frameIndex++;

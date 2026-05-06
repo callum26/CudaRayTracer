@@ -164,6 +164,7 @@ int main()
     initDevicePixel(screenWidth, screenHeight);
     // moved scene init to host
     initScene();
+    const bool useBVH = false;
     float statsTimer = 0.0f;
 
     while (!glfwWindowShouldClose(win))
@@ -178,7 +179,7 @@ int main()
         glClear(GL_COLOR_BUFFER_BIT);
 
         // instead of only launching void function it now returns ms time for frames
-        float gpuMs = launchRayTracer(hostPixels, screenWidth, screenHeight);
+        float gpuMs = launchRayTracer(hostPixels, screenWidth, screenHeight, useBVH);
 
         // upload pixel data to texture took this from opengl graphics project in year2
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, screenWidth, screenHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, hostPixels);
@@ -204,7 +205,7 @@ int main()
         {
             char title[64];
             // stores it in a suitabke buffer
-            snprintf(title, sizeof(title), "CUDA Ray Tracer | FPS: %6.0f | Frame: %6.2fms | GPU: %6.2fms", fps, totalMs, gpuMs);
+            snprintf(title, sizeof(title), "CUDA Ray Tracer | %s | FPS: %6.0f | Frame: %6.2fms | GPU: %6.2fms", useBVH ? "BVH" : "Brute", fps, totalMs, gpuMs);
             glfwSetWindowTitle(win, title);
             statsTimer = 0.0f;
         }
