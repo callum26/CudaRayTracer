@@ -1139,49 +1139,49 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
                 rayCastObjects(ray, objectDistance, objectIndex, objects);
 
             // they both also update their value for their respective distances whenever they run and return true
-            if (objectIndex != -1)
+            if (objectIndex == -1)
+                break;
+
+            Object hitObject = objects[objectIndex];
+
+            // check for light emmisve material
+            if (hitObject.material.emission.x > 0.0f || hitObject.material.emission.y > 0.0f || hitObject.material.emission.z > 0.0f)
             {
-                Object hitObject = objects[objectIndex];
+                pixelColour = pixelColour + (hitObject.material.emission * strengthOfRay);
+                break;
+            }
 
-                // check for light emmisve material
-                if (hitObject.material.emission.x > 0.0f || hitObject.material.emission.y > 0.0f || hitObject.material.emission.z > 0.0f)
-                {
-                    pixelColour = pixelColour + (hitObject.material.emission * strengthOfRay);
-                    break;
-                }
+            // okay now we have to update each var depending on the results of the ray
+            // then we can calc the actual final value
+            // update hitointl ray dir making sure it runs shadeSphere with its new values
+            Vec3 hitPoint = ray.origin + (ray.direction * objectDistance);
+            ray.hitPoint = hitPoint;
 
-                // okay now we have to update each var depending on the results of the ray
-                // then we can calc the actual final value
-                // update hitointl ray dir making sure it runs shadeSphere with its new values
-                Vec3 hitPoint = ray.origin + (ray.direction * objectDistance);
-                ray.hitPoint = hitPoint;
+            Vec3 surfaceNormal = calcSurfaceNormal(ray, hitObject);
 
-                Vec3 surfaceNormal = calcSurfaceNormal(ray, hitObject);
+            // random branching for partial transparency
+            bool treatAsTransparent = (hitObject.material.transparency > 0.0f) &&
+                                      (curand_uniform(&rng) < hitObject.material.transparency);
 
-                // random branching for partial transparency
-                bool treatAsTransparent = (hitObject.material.transparency > 0.0f) &&
-                                          (curand_uniform(&rng) < hitObject.material.transparency);
+            if (treatAsTransparent)
+            {
+                // func mutates strengthOfRay in place with beer absorp and leaves
+                // the ray strength untouched so transmission stays visible
+                processTransparentRay(ray, hitObject, objectIndex, objectDistance, insideObjectIndex, insideEntryPoint, strengthOfRay, rng, surfaceNormal);
+            }
+            else // otherwise treat as opaque
+            {
+                Vec3 hitColour = postShadingColour(ray, hitObject, objectDistance, objectIndex, &rng, surfaceNormal, bvhNodes, bvhObjects, objects, strengthOfRay, useBVH);
+                pixelColour = pixelColour + (hitColour * strengthOfRay);
 
-                if (treatAsTransparent)
-                {
-                    // func mutates strengthOfRay in place with beer absorp and leaves
-                    // the ray strength untouched so transmission stays visible
-                    processTransparentRay(ray, hitObject, objectIndex, objectDistance, insideObjectIndex, insideEntryPoint, strengthOfRay, rng, surfaceNormal);
-                }
-                else // otherwise treat as opaque
-                {
-                    Vec3 hitColour = postShadingColour(ray, hitObject, objectDistance, objectIndex, &rng, surfaceNormal, bvhNodes, bvhObjects, objects, strengthOfRay, useBVH);
-                    pixelColour = pixelColour + (hitColour * strengthOfRay);
+                // calcs via opaque ray function simples the code
+                processOpaqueRay(ray, surfaceNormal, rng);
+                strengthOfRay = strengthOfRay * hitObject.material.colour;
+            }
 
-                    // calcs via opaque ray function simples the code
-                    processOpaqueRay(ray, surfaceNormal, rng);
-                    strengthOfRay = strengthOfRay * hitObject.material.colour;
-                }
-
-                if ((strengthOfRay.x + strengthOfRay.y + strengthOfRay.z) < 0.01f) // more aggressive culling
-                {
-                    break;
-                }
+            if ((strengthOfRay.x + strengthOfRay.y + strengthOfRay.z) < 0.01f) // more aggressive culling
+            {
+                break;
             }
         }
         postSampleColour = postSampleColour + pixelColour;
