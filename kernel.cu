@@ -307,7 +307,7 @@ __device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BV
         if (nodeIdx < 0 || nodeIdx >= bvhNodeCount)
             continue;
 
-        // fetch node from array bvhNodes using current node index
+        // fetch node from array bvhNodes using current node indexoeadoOO cache
         BVHNode node = bvhNodes[nodeIdx];
 
         // do ray test if no intersection then we can skip all objs inside
@@ -589,20 +589,20 @@ __device__ Vec3 reflectDir(const Ray &ray, const Vec3 &surfaceNormal)
 
 __device__ void applyBeerLambertAbsorption(Vec3 &strengthOfRay, const Object &hitObject, int objectIndex, int insideObjectIndex, const Vec3 &insideEntryPoint, const Ray &ray)
 {
-    if (insideObjectIndex == objectIndex)
-    {
-        // inside of passing in object distance we have to calculate the obj dist
-        // between ray hit point and new inside entry point
-        float objectDistance = (ray.hitPoint - insideEntryPoint).magnitude();
-        if (objectDistance <= 0.0f)
-            return;
+    if (insideObjectIndex != objectIndex)
+        return;
 
-        Vec3 absorption = hitObject.material.absorption;
-        // expf returns e^x where x is ()
-        strengthOfRay.x *= __expf(-absorption.x * objectDistance);
-        strengthOfRay.y *= __expf(-absorption.y * objectDistance);
-        strengthOfRay.z *= __expf(-absorption.z * objectDistance);
-    }
+    // inside of passing in object distance we have to calculate the obj dist
+    // between ray hit point and new inside entry point
+    float objectDistance = (ray.hitPoint - insideEntryPoint).magnitude();
+    if (objectDistance <= 0.0f)
+        return;
+
+    Vec3 absorption = hitObject.material.absorption;
+    // expf returns e^x where x is ()
+    strengthOfRay.x *= __expf(-absorption.x * objectDistance);
+    strengthOfRay.y *= __expf(-absorption.y * objectDistance);
+    strengthOfRay.z *= __expf(-absorption.z * objectDistance);
 }
 
 __device__ void offsetRayOrigin(Ray &ray, const Vec3 &offsetDirection, float offsetAmount)
@@ -634,7 +634,7 @@ __device__ __forceinline__ SurfaceInteraction computeSurfaceInteraction(const Ra
     return interaction;
 }
 
-__device__ float processTransparentRay(Ray &ray, const Object &hitObject, int objectIndex, float objectDistance, int &insideObjectIndex, Vec3 &insideEntryPoint, Vec3 &strengthOfRay, curandState &rng, Vec3 &surfaceNormal, bool isShadowRay = false)
+__device__ float processTransparentRay(Ray &ray, const Object &hitObject, int objectIndex, float objectDistance, int &insideObjectIndex, Vec3 &insideEntryPoint, Vec3 &strengthOfRay, curandState &rng, Vec3 &surfaceNormal)
 {
     SurfaceInteraction interaction = computeSurfaceInteraction(ray, surfaceNormal);
     surfaceNormal = interaction.normal;
@@ -670,7 +670,7 @@ __device__ float processTransparentRay(Ray &ray, const Object &hitObject, int ob
     // for spheres
     // we need to decide either to refract or reflectusing  fresnel
     // on shadow ray always refract
-    bool doReflect = totalInternalReflection || (!isShadowRay && (curand_uniform(&rng) < fresnelValue));
+    bool doReflect = totalInternalReflection || (curand_uniform(&rng) < fresnelValue));
 
     if (doReflect)
     {
@@ -695,15 +695,9 @@ __device__ float processTransparentRay(Ray &ray, const Object &hitObject, int ob
 
         // update the inside objectfor next beer
         // if entering sphere record if not dont bother
+        insideObjectIndex = (!interaction.inside) ? objectIndex : -1;
         if (!interaction.inside)
-        {
-            insideObjectIndex = objectIndex;
             insideEntryPoint = ray.hitPoint;
-        }
-        else
-        {
-            insideObjectIndex = -1;
-        }
 
         return 1.0f;
     }
@@ -942,16 +936,15 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
             shadowBounces++;
         }
 
+        if (blocked)
+            break;
         // then basicaally the same except accum dif and spec are multiplied by shadow transmission factor
-        if (!blocked)
-        {
-            Vec3 sampleDiffuse = {0.0f, 0.0f, 0.0f};
-            Vec3 sampleSpecular = {0.0f, 0.0f, 0.0f};
-            calcLighting(shadeRay, light, objectDistance, object, surfaceNormal, sampleDiffuse, sampleSpecular);
+        Vec3 sampleDiffuse = {0.0f, 0.0f, 0.0f};
+        Vec3 sampleSpecular = {0.0f, 0.0f, 0.0f};
+        calcLighting(shadeRay, light, objectDistance, object, surfaceNormal, sampleDiffuse, sampleSpecular);
 
-            accumulatedDiffuse = accumulatedDiffuse + (sampleDiffuse * shadowTransmission);
-            accumulatedSpecular = accumulatedSpecular + (sampleSpecular * shadowTransmission);
-        }
+        accumulatedDiffuse = accumulatedDiffuse + (sampleDiffuse * shadowTransmission);
+        accumulatedSpecular = accumulatedSpecular + (sampleSpecular * shadowTransmission);
     }
 
     // Ip = ka * ia + Sum (of all light soruces)(kd * (Lm . N)* im,d + ks * (Rm . V)^a * im,s))
@@ -1004,7 +997,7 @@ __device__ uchar4 toneMappedPixel(Vec3 *accumulation, int pixelIndex, int frameI
 {
     Vec3 accumulatedColour = accumulateColour(accumulation, processedColour, pixelIndex, frameIndex);
     // scales exposure
-    const float exposure = 0.6f;
+    const float exposure = 2.0f;
     float r = sqrtf(acesToneMap(accumulatedColour.x * exposure));
     float g = sqrtf(acesToneMap(accumulatedColour.y * exposure));
     float b = sqrtf(acesToneMap(accumulatedColour.z * exposure));
@@ -1112,7 +1105,7 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
             else // otherwise treat as opaque
             {
                 if (hitObject.material.transparency > 0.0f)
-                    strengthOfRay = strengthOfRay * (fmaxf(0.001f, 1.0f - hitObject.material.transparency));
+                    strengthOfRay = strengthOfRay * (1.0f / fmaxf(0.001f, 1.0f - hitObject.material.transparency));
 
                 Vec3 hitColour = postShadingColour(ray, hitObject, objectDistance, objectIndex, &rng, surfaceNormal, bvhNodes, bvhObjects, objects, strengthOfRay, useBVH);
                 pixelColour = pixelColour + (hitColour * strengthOfRay);
@@ -1178,7 +1171,7 @@ inline void addTriangle(Object *objects, int &objectCount, const Vec3 &v0, const
     // saves calculating later itll never change
     Vec3 edge1 = objects[objectCount].triangle.v1 - objects[objectCount].triangle.v0;
     Vec3 edge2 = objects[objectCount].triangle.v2 - objects[objectCount].triangle.v0;
-    objects[objectCount].triangle.normal = edge2.cross(edge1).normalise();
+    objects[objectCount].triangle.normal = edge2.cross(edge1);
 
     objectCount++;
 }

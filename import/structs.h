@@ -72,7 +72,7 @@ struct Vec3
     {
         // faster method to calculate normalise
         // rsqrtf reciproical of square root
-        float inverseSquare = rsqrtf(x * x + y * y + z * z);
+        float inverseSquare = __frsqrt_rn(x * x + y * y + z * z);
         // then multiply instead cheaper
         return {x * inverseSquare, y * inverseSquare, z * inverseSquare};
     }
