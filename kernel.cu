@@ -1122,7 +1122,7 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
         // every time ray bounces its strength is reduced
         Vec3 pixelColour = {0.0f, 0.0f, 0.0f};
         Vec3 strengthOfRay = {1.0f, 1.0f, 1.0f};
-        const int maxBounce = 4;
+        const int maxBounce = 15;
 
         // beers law tracking
         int insideObjectIndex = -1; // -1 meansn air
@@ -1257,12 +1257,12 @@ inline void addQuadAsTwoTriangles(Object *objects, int &objectCount, const Vec3 
 void initScene(bool perfTest)
 {
     Light Hlight = {
-        {0.0f, 2.95f, -5.0f},  // position
-        {0.20f, 0.18f, 0.14f}, // ambientIntensity
-        {1.0f, 0.92f, 0.78f},  // diffuseIntensity
-        {1.0f, 0.95f, 0.85f},  // specularIntensity
-        14.0f,                 // lightIntensity
-        0.9f                   // lightRadius
+        {0.0f, 2.75f, -5.0f},  // position
+        {0.35f, 0.35f, 0.32f}, // ambientIntensity
+        {1.0f, 0.98f, 0.88f},  // diffuseIntensity
+        {0.5f, 0.5f, 0.5f},    // specularIntensity
+        5.0f,                  // lightIntensity
+        0.55f                  // lightradiuys
     };
 
     // free up previous device scene data due to switching scenes now possible
@@ -1298,12 +1298,12 @@ void initScene(bool perfTest)
     Material whiteWall = {{0.82f, 0.82f, 0.80f}, 0.30f, 0.78f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
     Material redWall = {{0.65f, 0.07f, 0.07f}, 0.28f, 0.72f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
     Material greenWall = {{0.10f, 0.48f, 0.10f}, 0.28f, 0.72f, 0.02f, 5.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
-    Material lightFixtureMaterial = {{1.0f, 1.0f, 1.0f}, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {18.0f, 16.0f, 13.0f}};
+    Material lightFixtureMaterial = {{1.0f, 1.0f, 1.0f}, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {15.0f, 14.5f, 14.0f}};
     // three showcase spheres
     // saturated diffuse
     Material sphereDiffuse = {{0.08f, 0.15f, 0.88f}, 0.35f, 0.85f, 0.05f, 24.0f, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
     // clear glass
-    Material sphereGlass = {{0.98f, 0.98f, 0.98f}, 0.05f, 0.10f, 0.95f, 128.0f, 1.0f, 1.52f, {0.015f, 0.015f, 0.015f}, {0.0f, 0.0f, 0.0f}};
+    Material sphereGlass = {{0.9f, 0.9f, 0.9f}, 0.02f, 0.0f, 0.98f, 200.0f, 1.0f, 1.4f, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
     // amber tinted glass
     Material sphereAmber = {{0.98f, 0.98f, 0.98f}, 0.05f, 0.10f, 0.95f, 128.0f, 1.0f, 1.45f, {0.08f, 0.40f, 0.95f}, {0.0f, 0.0f, 0.0f}};
     // lighting fixture
