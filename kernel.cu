@@ -29,7 +29,7 @@ static int *deviceBvhObjects = nullptr;
 // for objs
 static Object *deviceObjects = nullptr;
 // cur frames
-static int currentFrame = 0;
+static int frameIndex = 0;
 
 // from my reading on https://www.scratchapixel.com/lessons/3d-basic-rendering/minimal-ray-tracer-rendering-simple-shapes/ray-sphere-intersection
 // ray defoed as ray(t) = Origin + t * Direction
@@ -1206,7 +1206,6 @@ void initDevicePixel(int w, int h)
     cudaMalloc(&devicePixels, w * h * sizeof(uchar4));
     cudaMalloc(&deviceAccumulation, w * h * sizeof(Vec3));
     cudaMemset(deviceAccumulation, 0, w * h * sizeof(Vec3));
-    currentFrame = 0;
 }
 
 void freeDevicePixels()
@@ -1298,7 +1297,6 @@ void initScene()
         }
     }
 
-    /*
     addQuadAsTwoTriangles(
         Hobjects, HobjectCount,
         {-0.8f, 2.999f, -5.8f}, {-0.8f, 2.999f, -4.2f},
@@ -1347,6 +1345,7 @@ void initScene()
         {3.0f, -3.0f, 1.0f}, {3.0f, 3.0f, 1.0f},
         whiteWall);
 
+    /*
     addSphere(
         Hobjects, HobjectCount,
         {-1.25f, -2.0f, -6.2f}, sphereDiffuse, 1.0f);
@@ -1370,7 +1369,7 @@ void initScene()
     }
 
     BVHNode HbvhNodes[256];
-    int HbvhObjects[64];
+    int HbvhObjects[256];
     int HbvhNodeCount = 0;
     int HbvhRootIndex = buildBVH(buildObject, 0, HobjectCount, HbvhNodes, HbvhNodeCount);
 
@@ -1405,7 +1404,6 @@ float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight, bool 
     // https://developer.nvidia.com/blog/how-implement-performance-metrics-cuda-cc/
     // as mentioned on the nvidia blog its better to use the inbuilt functions for timings in cuda instead of cpu itmings
     // the way on the blog is the best way to go about it
-    static int frameIndex = 0;
     // change to stop destroying events every frame
     static cudaEvent_t start, stop;
     static bool eventReady = false;
@@ -1440,5 +1438,5 @@ float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight, bool 
 void resetAccumulation()
 {
     cudaMemset(deviceAccumulation, 0, screenWidth * screenHeight * sizeof(Vec3));
-    currentFrame = 0;
+    frameIndex = 0;
 }

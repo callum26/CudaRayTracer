@@ -227,7 +227,7 @@ int main()
             statsTimer = 0.0f;
             frameCount = 0;
             accumulatedGpuMs = 0.0f;
-            accumulatedTotalMs = 0.0f
+            accumulatedTotalMs = 0.0f;
         }
     }
 
