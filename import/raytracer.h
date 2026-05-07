@@ -6,7 +6,8 @@ float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight, bool 
 void initDevicePixel(int screenWidth, int screenHeight);
 void freeDevicePixels();
 
-void initScene();
+// either new performance test or regualr scene
+void initScene(bool perfTest);
 
 void resetAccumulation();
 

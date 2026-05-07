@@ -163,9 +163,11 @@ int main()
     unsigned char *hostPixels = new unsigned char[screenWidth * screenHeight * 4];
     initDevicePixel(screenWidth, screenHeight);
     // moved scene init to host
-    initScene();
+    bool perfTest = false;
+    initScene(perfTest);
     bool useBVH = false;
     bool bKeyPressed = false;
+    bool tKeyPressed = false;
     float statsTimer = 0.0f;
     float frameCount = 0;
     float accumulatedGpuMs = 0.0f;
@@ -185,6 +187,15 @@ int main()
             resetAccumulation();
         }
         bKeyPressed = bKeyDown;
+
+        bool tKeyDown = glfwGetKey(win, GLFW_KEY_T) == GLFW_PRESS;
+        if (tKeyDown && !tKeyPressed)
+        {
+            perfTest = !perfTest;
+            initScene(perfTest);
+            resetAccumulation();
+        }
+        tKeyPressed = tKeyDown;
 
         // clear screen
         glClearColor(0.2f, 0.3f, 0.3f, 1.0f);

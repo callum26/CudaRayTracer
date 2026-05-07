@@ -299,7 +299,7 @@ __device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BV
 {
     // we will use a depth first search to travese the tree
     // stack to store which nodes visted
-    int stack[32];
+    int stack[64];
     int stackPtr = 0;
     // pinc to store current node on stack
     stack[stackPtr++] = bvhRootIndex;
@@ -450,7 +450,7 @@ __device__ bool rayCastShadowBVH(const Ray &ray, float &hitDistance, int &object
 {
     // we will use a depth first search to travese the tree
     // stack to store which nodes visted
-    int stack[32];
+    int stack[64];
     int stackPtr = 0;
     // pinc to store current node on stack
     stack[stackPtr++] = bvhRootIndex;
@@ -1254,7 +1254,7 @@ inline void addQuadAsTwoTriangles(Object *objects, int &objectCount, const Vec3 
 // additioned init scene to prevent reloading the scene
 // H prefix meaning host
 /*MAYBE MAKE THIS MORE CLEAR*/
-void initScene()
+void initScene(bool perfTest)
 {
     Light Hlight = {
         {0.0f, 2.95f, -5.0f},  // position
@@ -1265,8 +1265,33 @@ void initScene()
         0.9f                   // lightRadius
     };
 
-    Object Hobjects[256];
-    BuildObject buildObject[256];
+    // free up previous device scene data due to switching scenes now possible
+    if (deviceRngStates)
+    {
+        cudaFree(deviceRngStates);
+        deviceRngStates = nullptr;
+    }
+    if (deviceBvhNodes)
+    {
+        cudaFree(deviceBvhNodes);
+        deviceBvhNodes = nullptr;
+    }
+    if (deviceBvhObjects)
+    {
+        cudaFree(deviceBvhObjects);
+        deviceBvhObjects = nullptr;
+    }
+    if (deviceObjects)
+    {
+        cudaFree(deviceObjects);
+        deviceObjects = nullptr;
+    }
+
+    int MAX_OBJECTS = perfTest ? 1024 : 256;
+
+    // heap allocations instead of stack arrays
+    Object *Hobjects = new Object[MAX_OBJECTS];
+    BuildObject *buildObject = new BuildObject[MAX_OBJECTS];
     int HobjectCount = 0;
 
     /*EXPLAIN THESE LATER TEST DATA*/
@@ -1286,15 +1311,28 @@ void initScene()
     //
     //
     //
-    // PERFORMANCE TEST
-    // 64 spheres
-    for (int x = 0; x < 8; x++)
+    // choose between performance test scene
+    if (perfTest)
     {
-        for (int z = 0; z < 8; z++)
+        // PERFORMANCE TEST 10x10x10
+        for (int x = 0; x < 10; x++)
         {
-            Vec3 pos = {-3.0f + x * 0.85f, -2.5f, -3.0f - z * 0.85f};
-            addSphere(Hobjects, HobjectCount, pos, sphereDiffuse, 0.35f);
+            for (int y = 0; y < 10; y++)
+            {
+                for (int z = 0; z < 10; z++)
+                {
+                    Vec3 pos = {-3.0f + x * 0.55f, -2.5f + y * 0.55f, -3.0f - z * 0.55f};
+                    addSphere(Hobjects, HobjectCount, pos, sphereDiffuse, 0.20f);
+                }
+            }
         }
+    }
+    else
+    {
+        // old demo scene
+        addSphere(Hobjects, HobjectCount, {-1.25f, -2.0f, -6.2f}, sphereDiffuse, 1.0f);
+        addSphere(Hobjects, HobjectCount, {1.30f, -1.20f, -5.10f}, sphereGlass, 0.8f);
+        addSphere(Hobjects, HobjectCount, {-0.55f, -2.50f, -3.70f}, sphereAmber, 0.50f);
     }
 
     addQuadAsTwoTriangles(
@@ -1345,21 +1383,6 @@ void initScene()
         {3.0f, -3.0f, 1.0f}, {3.0f, 3.0f, 1.0f},
         whiteWall);
 
-    /*
-    addSphere(
-        Hobjects, HobjectCount,
-        {-1.25f, -2.0f, -6.2f}, sphereDiffuse, 1.0f);
-
-    addSphere(
-        Hobjects, HobjectCount,
-        {1.30f, -1.20f, -5.10f}, sphereGlass, 0.8f);
-
-    addSphere(
-        Hobjects, HobjectCount,
-        {-0.55f, -2.50f, -3.70f}, sphereAmber, 0.50f);
-
-    */
-
     for (int i = 0; i < HobjectCount; i++)
     {
         // fill in buildobject struct
@@ -1368,8 +1391,8 @@ void initScene()
         buildObject[i].objectIndex = i;
     }
 
-    BVHNode HbvhNodes[256];
-    int HbvhObjects[256];
+    BVHNode *HbvhNodes = new BVHNode[MAX_OBJECTS * 4];
+    int *HbvhObjects = new int[MAX_OBJECTS];
     int HbvhNodeCount = 0;
     int HbvhRootIndex = buildBVH(buildObject, 0, HobjectCount, HbvhNodes, HbvhNodeCount);
 
@@ -1391,12 +1414,18 @@ void initScene()
 
     cudaMemcpy(deviceBvhNodes, HbvhNodes, sizeof(BVHNode) * HbvhNodeCount, cudaMemcpyHostToDevice);
     cudaMemcpy(deviceBvhObjects, HbvhObjects, sizeof(int) * HobjectCount, cudaMemcpyHostToDevice);
-    cudaMemcpy(deviceObjects, &Hobjects, sizeof(Object) * HobjectCount, cudaMemcpyHostToDevice);
+    cudaMemcpy(deviceObjects, Hobjects, sizeof(Object) * HobjectCount, cudaMemcpyHostToDevice);
 
     cudaMemcpyToSymbol(bvhRootIndex, &HbvhRootIndex, sizeof(int));
     cudaMemcpyToSymbol(bvhNodeCount, &HbvhNodeCount, sizeof(int));
     cudaMemcpyToSymbol(light, &Hlight, sizeof(Light));
     cudaMemcpyToSymbol(objectCount, &HobjectCount, sizeof(int));
+
+    // free host memory once copied to GPU
+    delete[] Hobjects;
+    delete[] buildObject;
+    delete[] HbvhNodes;
+    delete[] HbvhObjects;
 }
 
 float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight, bool useBVH)
