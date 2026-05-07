@@ -8,4 +8,6 @@ void freeDevicePixels();
 
 void initScene();
 
+void resetAccumulation();
+
 #endif

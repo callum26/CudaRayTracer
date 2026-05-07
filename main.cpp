@@ -164,8 +164,12 @@ int main()
     initDevicePixel(screenWidth, screenHeight);
     // moved scene init to host
     initScene();
-    const bool useBVH = false;
+    bool useBVH = false;
+    bool bKeyPressed = false;
     float statsTimer = 0.0f;
+    float frameCount = 0;
+    float accumulatedGpuMs = 0.0f;
+    float accumulatedTotalMs = 0.0f;
 
     while (!glfwWindowShouldClose(win))
     {
@@ -173,6 +177,14 @@ int main()
 
         if (glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS)
             glfwSetWindowShouldClose(win, true);
+
+        bool bKeyDown = glfwGetKey(win, GLFW_KEY_B) == GLFW_PRESS;
+        if (bKeyDown && !bKeyPressed)
+        {
+            useBVH = !useBVH;
+            resetAccumulation();
+        }
+        bKeyPressed = bKeyDown;
 
         // clear screen
         glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
@@ -194,20 +206,28 @@ int main()
         glfwSwapBuffers(win);
         glfwPollEvents();
 
-        float frameEnd = glfwGetTime();
+        float totalMs = (float)((glfwGetTime() - frameStart) * 1000.0f);
 
-        // full frame time include GPU processing ime
-        float totalMs = (float)((frameEnd - frameStart) * 1000.0f);
-        float fps = 1000.0f / totalMs;
-
+        accumulatedGpuMs += gpuMs;
+        accumulatedTotalMs += totalMs;
+        frameCount++;
         statsTimer += totalMs / 1000.0f;
-        if (statsTimer >= 0.1)
+
+        if (statsTimer >= 0.5)
         {
-            char title[64];
+            float avgGpuMs = accumulatedGpuMs / frameCount;
+            float avgTotalMs = accumulatedTotalMs / frameCount;
+            float avgFps = 1000.0f / avgTotalMs;
+
+            char title[96];
             // stores it in a suitabke buffer
-            snprintf(title, sizeof(title), "CUDA Ray Tracer | %s | FPS: %6.0f | Frame: %6.2fms | GPU: %6.2fms", useBVH ? "BVH" : "Brute", fps, totalMs, gpuMs);
+            snprintf(title, sizeof(title), "CUDA Ray Tracer | %s | FPS: %6.0f | Frame: %6.2fms | GPU: %6.2fms", useBVH ? "BVH" : "Brute", avgFps, avgTotalMs, avgGpuMs);
             glfwSetWindowTitle(win, title);
+
             statsTimer = 0.0f;
+            frameCount = 0;
+            accumulatedGpuMs = 0.0f;
+            accumulatedTotalMs = 0.0f
         }
     }
 

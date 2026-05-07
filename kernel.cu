@@ -455,6 +455,10 @@ __device__ bool rayCastShadowBVH(const Ray &ray, float &hitDistance, int &object
     // pinc to store current node on stack
     stack[stackPtr++] = bvhRootIndex;
 
+    // anything beyond light is irrev
+    float closest = maxDist;
+    int closestIdx = -1;
+
     // keep going till stack empty
     while (stackPtr > 0)
     {
@@ -469,7 +473,7 @@ __device__ bool rayCastShadowBVH(const Ray &ray, float &hitDistance, int &object
         BVHNode node = bvhNodes[nodeIdx];
 
         // as shadow if any thing hit then must of hit object shadow ray
-        if (!hitAABB(ray, node.box, maxDist))
+        if (!hitAABB(ray, node.box, closest))
             continue;
 
         // if more than 0 objs in node
@@ -497,11 +501,14 @@ __device__ bool rayCastShadowBVH(const Ray &ray, float &hitDistance, int &object
                                : rayIntersectSphere(ray, objects[objIdx].sphere, dist);
 
                 // then check that bool instead
-                if (hit && dist > 0.001f && dist < maxDist)
+                if (hit && dist > 0.001f && dist < closest)
                 {
-                    hitDistance = dist;
+                    closest = dist;
                     objectIndex = objIdx;
-                    return true;
+                    // early exit only if closet hit obj is opqauqe
+                    // light is fully blocked no point in searching
+                    if (objects[objIdx].material.transparency == 0.0f)
+                        goto done; // goto best way to break nested loops
                 }
             }
         }
@@ -516,6 +523,13 @@ __device__ bool rayCastShadowBVH(const Ray &ray, float &hitDistance, int &object
             if (node.leftIndex >= 0)
                 stack[stackPtr++] = node.leftIndex;
         }
+    }
+done:
+    if (closestIdx >= 0)
+    {
+        hitDistance = closest;
+        objectIndex = closestIdx;
+        return true;
     }
     // ifnot no obj hit
     return false;
@@ -1252,7 +1266,8 @@ void initScene()
         0.9f                   // lightRadius
     };
 
-    Object Hobjects[64];
+    Object Hobjects[256];
+    BuildObject buildObject[256];
     int HobjectCount = 0;
 
     /*EXPLAIN THESE LATER TEST DATA*/
@@ -1268,6 +1283,22 @@ void initScene()
     // amber tinted glass
     Material sphereAmber = {{0.98f, 0.98f, 0.98f}, 0.05f, 0.10f, 0.95f, 128.0f, 1.0f, 1.45f, {0.08f, 0.40f, 0.95f}, {0.0f, 0.0f, 0.0f}};
     // lighting fixture
+
+    //
+    //
+    //
+    // PERFORMANCE TEST
+    // 64 spheres
+    for (int x = 0; x < 8; x++)
+    {
+        for (int z = 0; z < 8; z++)
+        {
+            Vec3 pos = {-3.0f + x * 0.85f, -2.5f, -3.0f - z * 0.85f};
+            addSphere(Hobjects, HobjectCount, pos, sphereDiffuse, 0.35f);
+        }
+    }
+
+    /*
     addQuadAsTwoTriangles(
         Hobjects, HobjectCount,
         {-0.8f, 2.999f, -5.8f}, {-0.8f, 2.999f, -4.2f},
@@ -1328,8 +1359,8 @@ void initScene()
         Hobjects, HobjectCount,
         {-0.55f, -2.50f, -3.70f}, sphereAmber, 0.50f);
 
-    // build bvh
-    BuildObject buildObject[64];
+    */
+
     for (int i = 0; i < HobjectCount; i++)
     {
         // fill in buildobject struct
@@ -1404,4 +1435,10 @@ float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight, bool 
     cudaEventElapsedTime(&ms, start, stop);
 
     return ms;
+}
+// reset frames when swithcing from bvh to brute force
+void resetAccumulation()
+{
+    cudaMemset(deviceAccumulation, 0, screenWidth * screenHeight * sizeof(Vec3));
+    currentFrame = 0;
 }
