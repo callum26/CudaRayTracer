@@ -117,27 +117,24 @@ __device__ bool rayIntersectSphere(const Ray &ray, const Sphere &sphere, float &
     // b^2 - 4 * a * c
     float discriminant = b * b - (4.0f * a * c);
 
-    // mentioned above check for only real solutions either discrim is greater than 0 or exactly 0
-    if (discriminant >= 0)
-    {
-        // (- b - sqrt(b^2-4ac)) / 2a for nearest intersection to the camera  enter spehere
-        // (- b - sqrt(b^2-4ac)) / 2a for far intsect to cam  exit spehere
-        float inv2A = 1.0f / (2.0f * a);
-        float closeIntersection = (-b - sqrtf(discriminant)) * inv2A;
-        if (closeIntersection > 0.01f)
-        {
-            distance = closeIntersection;
-            return true;
-        }
+    // early exit if no int
+    if (discriminant < 0)
+        return false;
 
-        float farIntersection = (-b + sqrtf(discriminant)) * inv2A;
-        if (farIntersection > 0.01f)
-        {
-            distance = farIntersection;
-            return true;
-        }
-    }
-    return false;
+    // (- b - sqrt(b^2-4ac)) / 2a for nearest intersection to the camera  enter spehere
+    // (- b - sqrt(b^2-4ac)) / 2a for far intsect to cam  exit spehere
+    float inv2A = 1.0f / (2.0f * a);
+    float sqrtDis = sqrtf(discriminant);
+
+    float closeIntersection = (-b - sqrtDis) * inv2A;
+    float farIntersection = (-b + sqrtDis) * inv2A;
+
+    float smallestDis = (closeIntersection > 0.01f) ? closeIntersection : farIntersection;
+
+    if (smallestDis < 0.01f)
+        return false;
+    distance = smallestDis;
+    return true;
 }
 
 __device__ bool rayIntersectTriangle(const Ray &ray, const Triangle &triangle, float &distance)
@@ -269,9 +266,7 @@ __device__ bool rayIntersectTriangle(const Ray &ray, const Triangle &triangle, f
 
     // just like ground if parallel no bother or near zero
     if (fabsf(baseDet) < 0.0001f)
-    {
         return false;
-    }
 
     // prevents dividing 3 trimes
     float invDet = 1.0f / baseDet;
@@ -282,17 +277,11 @@ __device__ bool rayIntersectTriangle(const Ray &ray, const Triangle &triangle, f
 
     // also coords u, v must be between 0 and 1
     // and also must add between 0 and 1 so we check
-    if (u < 0.0f || u > 1.0f)
+    if (u < 0.0f || u > 1.0f || v < 0.0f || u + v > 1.0f || t < 0.01f)
         return false; // false if outside range
-    if (v < 0.0f || u + v > 1.0f)
-        return false; // check for less than 0 and combined check for u + v
 
-    if (t > 0.01f)
-    {
-        distance = t;
-        return true;
-    }
-    return false;
+    distance = t;
+    return true;
 }
 // searchs through the BVH to find which object ray hits
 __device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BVHNode *bvhNodes, int *bvhObjects, Object *objects)
@@ -325,8 +314,9 @@ __device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BV
         if (!hitAABB(ray, node.box, closest))
             continue;
 
-        // if more than 0 objs in node
-        if (node.objectCount > 0)
+        // if less than 0 objs in node
+        // push children
+        if (node.objectCount > 0) // not leaf node it has up to two children
         {
             // runs through all objs in leaf
             for (int i = 0; i < node.objectCount; i++)
@@ -350,19 +340,14 @@ __device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BV
                                               : rayIntersectSphere(ray, objects[objIdx].sphere, dist);
 
                 // then check that bool instead
-                if (objectRayIntersect)
+                if (objectRayIntersect && dist < closest)
                 {
-                    // but we are making sure we always keep the closest obj and its id
-                    if (dist < closest)
-                    {
-                        closest = dist;
-                        closestIdx = objIdx;
-                    }
+                    closest = dist;
+                    closestIdx = objIdx;
                 }
             }
         }
-        // push children
-        else // not leaf node it has up to two children
+        else
         {
             // LIFO so do right child first pushed first popped last
             // if righ child push rightIndex onto stack
@@ -374,16 +359,12 @@ __device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BV
         }
     }
 
-    // as long as we have found at least on hit
-    if (closestIdx >= 0)
-    {
-        // copy results reporting sucess
-        distance = closest;
-        objectIndex = closestIdx;
-        return true;
-    }
-    // ifnot no obj hit
-    return false;
+    if (closestIdx < 0)
+        return false; // ifnot no obj hit
+
+    distance = closest;
+    objectIndex = closestIdx;
+    return true;
 }
 
 // og code for testing old brute force
@@ -406,14 +387,12 @@ __device__ bool rayCastObjects(const Ray &ray, float &distance, int &objectIndex
         }
     }
 
-    if (closestIdx >= 0)
-    {
-        distance = closest;
-        objectIndex = closestIdx;
-        return true;
-    }
+    if (closestIdx < 0)
+        return false; // ifnot no obj hit
 
-    return false;
+    distance = closest;
+    objectIndex = closestIdx;
+    return true;
 }
 
 // og code for testing old brute force shadow
@@ -436,14 +415,12 @@ __device__ bool rayCastShadowObjects(const Ray &ray, float &hitDistance, int &ob
         }
     }
 
-    if (closestIdx >= 0)
-    {
-        hitDistance = closest;
-        objectIndex = closestIdx;
-        return true;
-    }
+    if (closestIdx < 0)
+        return false; // ifnot no obj hit
 
-    return false;
+    hitDistance = closest;
+    objectIndex = closestIdx;
+    return true;
 }
 
 __device__ bool rayCastShadowBVH(const Ray &ray, float &hitDistance, int &objectIndex, BVHNode *bvhNodes, int *bvhObjects, Object *objects, float maxDist)
@@ -479,60 +456,34 @@ __device__ bool rayCastShadowBVH(const Ray &ray, float &hitDistance, int &object
         // if more than 0 objs in node
         if (node.objectCount > 0)
         {
-            // runs through all objs in leaf
             for (int i = 0; i < node.objectCount; i++)
             {
-                // gets object index from list of all bvhObjects
-                // the way it works
-                // e.g. leaf node contains 3 objs so node.objectCount = 3
-                // node.firstObject is the pos in bvhObjects where the objs within this specific node are stored
-                // lets say  node.firstObject = 4
-                // bcos there are 3 objs this leaf needs pos 4,5,6 for all 3 objs within the bvhObjects array
-                // as it iterates through the object count in our case 0,1,2
-                // node.firstObject is added with each of our i
-                // giving the ids of 4,5,6 which is what we need
                 int objIdx = bvhObjects[node.firstObject + i];
 
-                //  then do normal ray interset with each obj within the box
                 float dist = INFINITY;
-                // split into two funcs one for tri and one for sphere easier to check for object type then within one equation
                 bool hit = objects[objIdx].type == triangleObject
                                ? rayIntersectTriangle(ray, objects[objIdx].triangle, dist)
                                : rayIntersectSphere(ray, objects[objIdx].sphere, dist);
 
-                // then check that bool instead
                 if (hit && dist > 0.001f && dist < closest)
                 {
                     closest = dist;
                     objectIndex = objIdx;
-                    // early exit only if closet hit obj is opqauqe
-                    // light is fully blocked no point in searching
                     if (objects[objIdx].material.transparency == 0.0f)
-                        goto done; // goto best way to break nested loops
+                        return true;
                 }
             }
         }
-        // push children
-        else // not leaf node it has up to two children
+        else // push children
         {
-            // LIFO so do right child first pushed first popped last
-            // if righ child push rightIndex onto stack
             if (node.rightIndex >= 0)
                 stack[stackPtr++] = node.rightIndex;
-            // if left child push leftIndex onto stack
             if (node.leftIndex >= 0)
                 stack[stackPtr++] = node.leftIndex;
         }
     }
-done:
-    if (closestIdx >= 0)
-    {
-        hitDistance = closest;
-        objectIndex = closestIdx;
-        return true;
-    }
-    // ifnot no obj hit
-    return false;
+    hitDistance = closest;
+    return true;
 }
 
 // surfaceNormal - normalised direction vector of a vector perpendicular to surface on that point
@@ -946,66 +897,49 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
                                     ? rayCastShadowBVH(shadowRay, shadowHitDistance, shadowHitObject, bvhNodes, bvhObjects, objects, distanceRemain)
                                     : rayCastShadowObjects(shadowRay, shadowHitDistance, shadowHitObject, objects, distanceRemain);
 
-            // check if we hit an object before reaching the light
-            if (hitSomething && shadowHitDistance > 0.001f && shadowHitDistance < distanceRemain - 0.001f)
+            // only process hits that are between origin and light
+            if (!hitSomething || shadowHitDistance < 0.001f || shadowHitDistance > distanceRemain - 0.001f)
+                break;
+
+            Object hitObj = objects[shadowHitObject];
+            Vec3 surfaceNormal = calcSurfaceNormal(shadowRay, hitObj);
+
+            if (hitObj.material.transparency == 0.0f)
             {
-                Object hitObj = objects[shadowHitObject];
-                Vec3 surfaceNormal = calcSurfaceNormal(shadowRay, hitObj);
-
-                if (hitObj.material.transparency > 0.0f)
-                {
-                    // set hit point ray before passing
-                    shadowRay.hitPoint = currentShadowOrigin + (shadowDirection * shadowHitDistance);
-
-                    SurfaceInteraction interaction = computeSurfaceInteraction(shadowRay, surfaceNormal);
-                    surfaceNormal = interaction.normal;
-
-                    // also adjusts refraction ratio because its changes depending on exit / entrance
-                    float refractionRatio = interaction.inside
-                                                ? hitObj.material.refraction
-                                                : 1.0f / hitObj.material.refraction;
-
-                    applyBeerLambertAbsorption(shadowStrength, hitObj, shadowHitObject, insideObjectIndex, insideEntryPoint, shadowRay);
-
-                    shadowTransmission = shadowTransmission * shadowStrength;
-                    if (!interaction.inside)
-                    {
-                        shadowTransmission = shadowTransmission * hitObj.material.transparency;
-                    }
-                    shadowStrength = {1.0f, 1.0f, 1.0f};
-
-                    Vec3 refractDirection = refractDir(shadowRay, surfaceNormal, refractionRatio);
-                    if (!interaction.inside)
-                    {
-                        insideObjectIndex = shadowHitObject;
-                        insideEntryPoint = shadowRay.hitPoint;
-                    }
-                    else
-                    {
-                        insideObjectIndex = -1;
-                    }
-
-                    shadowRay.direction = refractDirection;
-                    offsetRayOrigin(shadowRay, shadowRay.direction, 0.001f);
-
-                    // continue shadow ray through transparent object
-                    currentShadowOrigin = shadowRay.origin;
-                    shadowDirection = shadowRay.direction;
-                    distanceRemain -= shadowHitDistance;
-                    shadowBounces++;
-                }
-                else
-                {
-                    // opaque obj then light is completely blocked.
-                    blocked = true;
-                    break;
-                }
-            }
-            else
-            {
-                // ray reached light or no more hits
+                blocked = true;
                 break;
             }
+            // set hit point ray before passing
+            shadowRay.hitPoint = currentShadowOrigin + (shadowDirection * shadowHitDistance);
+
+            SurfaceInteraction interaction = computeSurfaceInteraction(shadowRay, surfaceNormal);
+            surfaceNormal = interaction.normal;
+
+            // also adjusts refraction ratio because its changes depending on exit / entrance
+            float refractionRatio = interaction.inside
+                                        ? hitObj.material.refraction
+                                        : 1.0f / hitObj.material.refraction;
+
+            applyBeerLambertAbsorption(shadowStrength, hitObj, shadowHitObject, insideObjectIndex, insideEntryPoint, shadowRay);
+            shadowTransmission = shadowTransmission * shadowStrength;
+
+            if (!interaction.inside)
+                shadowTransmission = shadowTransmission * hitObj.material.transparency;
+            shadowStrength = {1.0f, 1.0f, 1.0f};
+
+            Vec3 refractDirection = refractDir(shadowRay, surfaceNormal, refractionRatio);
+            insideObjectIndex = !interaction.inside ? shadowHitObject : insideObjectIndex = -1;
+            if (!interaction.inside)
+                insideEntryPoint = shadowRay.hitPoint;
+
+            shadowRay.direction = refractDirection;
+            offsetRayOrigin(shadowRay, shadowRay.direction, 0.001f);
+
+            // continue shadow ray through transparent object
+            currentShadowOrigin = shadowRay.origin;
+            shadowDirection = shadowRay.direction;
+            distanceRemain -= shadowHitDistance;
+            shadowBounces++;
         }
 
         // then basicaally the same except accum dif and spec are multiplied by shadow transmission factor
@@ -1154,8 +1088,7 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
             // okay now we have to update each var depending on the results of the ray
             // then we can calc the actual final value
             // update hitointl ray dir making sure it runs shadeSphere with its new values
-            Vec3 hitPoint = ray.origin + (ray.direction * objectDistance);
-            ray.hitPoint = hitPoint;
+            ray.hitPoint = ray.origin + (ray.direction * objectDistance);
 
             Vec3 surfaceNormal = calcSurfaceNormal(ray, hitObject);
 
@@ -1165,12 +1098,22 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
 
             if (treatAsTransparent)
             {
-                // func mutates strengthOfRay in place with beer absorp and leaves
-                // the ray strength untouched so transmission stays visible
+                Vec3 sampleDiffuse = {0.0f, 0.0f, 0.0f};
+                Vec3 sampleSpecular = {0.0f, 0.0f, 0.0f};
+
+                calcLighting(ray, light, objectDistance, hitObject, surfaceNormal, sampleDiffuse, sampleSpecular);
+                pixelColour = pixelColour + (sampleSpecular * strengthOfRay);
+
+                // protect against div by 0
+                strengthOfRay = strengthOfRay * (1.0f / fmaxf(0.001f, hitObject.material.transparency));
+
                 processTransparentRay(ray, hitObject, objectIndex, objectDistance, insideObjectIndex, insideEntryPoint, strengthOfRay, rng, surfaceNormal);
             }
             else // otherwise treat as opaque
             {
+                if (hitObject.material.transparency > 0.0f)
+                    strengthOfRay = strengthOfRay * (fmaxf(0.001f, 1.0f - hitObject.material.transparency));
+
                 Vec3 hitColour = postShadingColour(ray, hitObject, objectDistance, objectIndex, &rng, surfaceNormal, bvhNodes, bvhObjects, objects, strengthOfRay, useBVH);
                 pixelColour = pixelColour + (hitColour * strengthOfRay);
 

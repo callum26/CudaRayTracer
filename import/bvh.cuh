@@ -196,7 +196,7 @@ __host__ int buildBVH(BuildObject *objs, int start, int end, BVHNode *nodes, int
     /* CURRENTLY NOT ACCURATE RATIO COULD MEASURE ACTUALLY HOW LONG IT TAKES TO GENERATE A PROPER RATIO BETWEEN INTERSECTION*/
     static const float cIntersect = 1.5f;
     // hard cap on objs per leaf regardless of SAH decision
-    static const int maxLeafSize = 4;
+    static const int maxLeafSize = 8;
 
     // post inc nodeCount passing ref so we can fill node with data
     int nodeIdx = nodeCount++;
