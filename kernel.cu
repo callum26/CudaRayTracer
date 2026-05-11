@@ -610,14 +610,19 @@ __device__ void offsetRayOrigin(Ray &ray, const Vec3 &offsetDirection, float off
     ray.origin = ray.hitPoint + (offsetDirection * offsetAmount);
 }
 
-/*EXPLAIN THIS*/
-__device__ float calcFresnel(const Ray &ray, const Vec3 &surfaceNormal, float refractionRatio)
+// created functino where we can pass in costheta to skip the steps as we calc it in processtransparent ray
+__device__ float calcFresnel(const Ray &ray, const Vec3 &surfaceNormal, float refractionRatio, float cosTheta)
 {
     // schlicks approx fresnel factor specular reflection
     float R0 = (1.0f - refractionRatio) / (1.0f + refractionRatio);
     R0 = R0 * R0;
-    float cosTheta = __saturatef(-ray.direction.dot(surfaceNormal));
     return __saturatef(R0 + (1.0f - R0) * __powf(1.0f - cosTheta, 5.0f));
+}
+
+__device__ float calcFresnel(const Ray &ray, const Vec3 &surfaceNormal, float refractionRatio)
+{
+    float cosTheta = __saturatef(-ray.direction.dot(surfaceNormal));
+    return calcFresnel(ray, surfaceNormal, refractionRatio, cosTheta);
 }
 
 __device__ __forceinline__ SurfaceInteraction computeSurfaceInteraction(const Ray &ray, const Vec3 &rawNormal)
@@ -634,7 +639,7 @@ __device__ __forceinline__ SurfaceInteraction computeSurfaceInteraction(const Ra
     return interaction;
 }
 
-__device__ float processTransparentRay(Ray &ray, const Object &hitObject, int objectIndex, float objectDistance, int &insideObjectIndex, Vec3 &insideEntryPoint, Vec3 &strengthOfRay, curandState &rng, Vec3 &surfaceNormal, bool isShadowRay = false)
+__device__ float processTransparentRay(Ray &ray, const Object &hitObject, int objectIndex, float objectDistance, int &insideObjectIndex, Vec3 &insideEntryPoint, Vec3 &strengthOfRay, curandState &rng, Vec3 &surfaceNormal)
 {
     SurfaceInteraction interaction = computeSurfaceInteraction(ray, surfaceNormal);
     surfaceNormal = interaction.normal;
@@ -661,49 +666,44 @@ __device__ float processTransparentRay(Ray &ray, const Object &hitObject, int ob
         return 1.0f;
     }
 
-    float cosTheta = fminf(fabsf(ray.direction.dot(surfaceNormal)), 1.0f);
+    float cosTheta = __saturatef(-ray.direction.dot(surfaceNormal));
     float sin2ThetaT = refractionRatio * refractionRatio * (1.0f - cosTheta * cosTheta);
     bool totalInternalReflection = sin2ThetaT > 1.0f;
 
-    float fresnelValue = calcFresnel(ray, surfaceNormal, refractionRatio);
+    float fresnelCosTheta = cosTheta;
+    if (interaction.inside)
+    {
+        fresnelCosTheta = (sin2ThetaT < 1.0f) ? sqrtf(1.0f - sin2ThetaT) : 0.0f;
+    }
+    // pas in our already calcuated fresenle bcos its our new angle
+    float fresnelValue = calcFresnel(ray, surfaceNormal, refractionRatio, fresnelCosTheta);
 
     // for spheres
     // we need to decide either to refract or reflectusing  fresnel
     // on shadow ray always refract
-    bool doReflect = totalInternalReflection || (!isShadowRay && (curand_uniform(&rng) < fresnelValue));
+    bool doReflect = totalInternalReflection || (curand_uniform(&rng) < fresnelValue);
 
     if (doReflect)
     {
-        // specular reflection branch primary ray only
-        // reflect ray off the surface normal
-        // clasic equagiton
+        // specular reflection branch
         Vec3 refractDirection = reflectDir(ray, surfaceNormal);
-
-        // again both uodate dir and origin
         offsetRayOrigin(ray, surfaceNormal, 0.001f);
         ray.direction = refractDirection;
 
-        // inside tracking same reflection doesnt go in obvs
+        if (totalInternalReflection)
+            insideEntryPoint = ray.hitPoint;
+
         return 1.0f;
     }
     else
     {
-        // compute refr dir
+        // refraction branch
         ray.direction = refractDir(ray, surfaceNormal, refractionRatio);
-        // move origin slightly inside the surface in the refracted dir
         offsetRayOrigin(ray, ray.direction, 0.001f);
 
-        // update the inside objectfor next beer
-        // if entering sphere record if not dont bother
+        insideObjectIndex = !interaction.inside ? objectIndex : -1;
         if (!interaction.inside)
-        {
-            insideObjectIndex = objectIndex;
             insideEntryPoint = ray.hitPoint;
-        }
-        else
-        {
-            insideObjectIndex = -1;
-        }
 
         return 1.0f;
     }
@@ -881,7 +881,7 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
 
         // vars for shadow bounces
         int shadowBounces = 0;
-        const int maxShadowBounces = 3;
+        const int maxShadowBounces = 8;
         bool blocked = false;
 
         int insideObjectIndex = -1; // -1 meansn air
@@ -915,11 +915,6 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
             SurfaceInteraction interaction = computeSurfaceInteraction(shadowRay, surfaceNormal);
             surfaceNormal = interaction.normal;
 
-            // also adjusts refraction ratio because its changes depending on exit / entrance
-            float refractionRatio = interaction.inside
-                                        ? hitObj.material.refraction
-                                        : 1.0f / hitObj.material.refraction;
-
             applyBeerLambertAbsorption(shadowStrength, hitObj, shadowHitObject, insideObjectIndex, insideEntryPoint, shadowRay);
             shadowTransmission = shadowTransmission * shadowStrength;
 
@@ -927,13 +922,13 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
                 shadowTransmission = shadowTransmission * hitObj.material.transparency;
             shadowStrength = {1.0f, 1.0f, 1.0f};
 
-            Vec3 refractDirection = refractDir(shadowRay, surfaceNormal, refractionRatio);
             insideObjectIndex = !interaction.inside ? shadowHitObject : insideObjectIndex = -1;
             if (!interaction.inside)
                 insideEntryPoint = shadowRay.hitPoint;
 
-            shadowRay.direction = refractDirection;
-            offsetRayOrigin(shadowRay, shadowRay.direction, 0.001f);
+            // keep shadow rays moving in the original light direction
+            // only attenuate through transparency
+            offsetRayOrigin(shadowRay, shadowDirection, 0.001f);
 
             // continue shadow ray through transparent object
             currentShadowOrigin = shadowRay.origin;
@@ -985,19 +980,20 @@ __device__ __forceinline__ float acesToneMap(float x)
 __device__ Vec3 accumulateColour(Vec3 *accumulation, Vec3 processedColour, int pixelIndex, int frameIndex)
 {
     // accumulates the colour from this frame and previous building up a multi frame average image
-    accumulation[pixelIndex].x += processedColour.x;
-    accumulation[pixelIndex].y += processedColour.y;
-    accumulation[pixelIndex].z += processedColour.z;
-    // computes averages colour across all of the frames so far
-    // helps smoothen out noise
-    float inverseFrame = 1.0f / (float)(frameIndex + 1);
-    Vec3 accumulatedColour;
+    float t = 1.0f / (float)(frameIndex + 1);
 
-    accumulatedColour.x = accumulation[pixelIndex].x * inverseFrame;
-    accumulatedColour.y = accumulation[pixelIndex].y * inverseFrame;
-    accumulatedColour.z = accumulation[pixelIndex].z * inverseFrame;
+    // read the current average
+    Vec3 currentAvg = accumulation[pixelIndex];
 
-    return accumulatedColour;
+    // running average to prevent floating point precision loss
+    currentAvg.x += (processedColour.x - currentAvg.x) * t;
+    currentAvg.y += (processedColour.y - currentAvg.y) * t;
+    currentAvg.z += (processedColour.z - currentAvg.z) * t;
+
+    // write average directly back to the buffer
+    accumulation[pixelIndex] = currentAvg;
+
+    return currentAvg;
 }
 
 __device__ uchar4 toneMappedPixel(Vec3 *accumulation, int pixelIndex, int frameIndex, Vec3 processedColour)
@@ -1005,9 +1001,10 @@ __device__ uchar4 toneMappedPixel(Vec3 *accumulation, int pixelIndex, int frameI
     Vec3 accumulatedColour = accumulateColour(accumulation, processedColour, pixelIndex, frameIndex);
     // scales exposure
     const float exposure = 0.6f;
-    float r = sqrtf(acesToneMap(accumulatedColour.x * exposure));
-    float g = sqrtf(acesToneMap(accumulatedColour.y * exposure));
-    float b = sqrtf(acesToneMap(accumulatedColour.z * exposure));
+    const float invGamma = 1.0f / 2.2f;
+    float r = powf((acesToneMap(accumulatedColour.x * exposure)), invGamma);
+    float g = powf((acesToneMap(accumulatedColour.y * exposure)), invGamma);
+    float b = powf((acesToneMap(accumulatedColour.z * exposure)), invGamma);
 
     unsigned char finalR = (unsigned char)(__saturatef(r) * 255.0f);
     unsigned char finalG = (unsigned char)(__saturatef(g) * 255.0f);
@@ -1094,7 +1091,7 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
 
             // random branching for partial transparency
             bool treatAsTransparent = (hitObject.material.transparency > 0.0f) &&
-                                      (curand_uniform(&rng) < hitObject.material.transparency);
+                                      (curand_uniform(&rng) <= hitObject.material.transparency);
 
             if (treatAsTransparent)
             {
@@ -1102,29 +1099,35 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
                 Vec3 sampleSpecular = {0.0f, 0.0f, 0.0f};
 
                 calcLighting(ray, light, objectDistance, hitObject, surfaceNormal, sampleDiffuse, sampleSpecular);
-                pixelColour = pixelColour + (sampleSpecular * strengthOfRay);
+                Vec3 fresnelNormal = (ray.direction.dot(surfaceNormal) > 0.0f)
+                                         ? surfaceNormal * -1.0f
+                                         : surfaceNormal;
+                float fresnelForSpec = calcFresnel(ray, fresnelNormal, 1.0f / fmaxf(0.001f, hitObject.material.refraction));
+                pixelColour = pixelColour + (sampleSpecular * strengthOfRay * fresnelForSpec);
 
-                // protect against div by 0
                 strengthOfRay = strengthOfRay * (1.0f / fmaxf(0.001f, hitObject.material.transparency));
-
                 processTransparentRay(ray, hitObject, objectIndex, objectDistance, insideObjectIndex, insideEntryPoint, strengthOfRay, rng, surfaceNormal);
             }
             else // otherwise treat as opaque
             {
                 if (hitObject.material.transparency > 0.0f)
-                    strengthOfRay = strengthOfRay * (fmaxf(0.001f, 1.0f - hitObject.material.transparency));
+                    strengthOfRay = strengthOfRay * (1.0f / fmaxf(0.001f, 1.0f - hitObject.material.transparency));
 
                 Vec3 hitColour = postShadingColour(ray, hitObject, objectDistance, objectIndex, &rng, surfaceNormal, bvhNodes, bvhObjects, objects, strengthOfRay, useBVH);
                 pixelColour = pixelColour + (hitColour * strengthOfRay);
 
                 // calcs via opaque ray function simples the code
                 processOpaqueRay(ray, surfaceNormal, rng);
-                strengthOfRay = strengthOfRay * hitObject.material.colour;
+                strengthOfRay = strengthOfRay * (hitObject.material.colour * hitObject.material.diffuseReflectivity);
             }
 
-            if ((strengthOfRay.x + strengthOfRay.y + strengthOfRay.z) < 0.01f) // more aggressive culling
+            // after bounce 3 rdeice whetetr to conutue
+            if (i > 3)
             {
-                break;
+                float survival = fminf(0.95f, fmaxf(strengthOfRay.x, fmaxf(strengthOfRay.y, strengthOfRay.z)));
+                if (curand_uniform(&rng) > survival)
+                    break;
+                strengthOfRay = strengthOfRay * (1.0f / survival);
             }
         }
         postSampleColour = postSampleColour + pixelColour;
@@ -1274,7 +1277,7 @@ void initScene(bool perfTest)
     {
         // old demo scene
         addSphere(Hobjects, HobjectCount, {-1.25f, -2.0f, -6.2f}, sphereDiffuse, 1.0f);
-        addSphere(Hobjects, HobjectCount, {1.30f, -1.20f, -5.10f}, sphereGlass, 0.8f);
+        addSphere(Hobjects, HobjectCount, {1.30f, -1.20f, -6.10f}, sphereGlass, 0.8f);
         addSphere(Hobjects, HobjectCount, {-0.55f, -2.50f, -3.70f}, sphereAmber, 0.50f);
     }
 
