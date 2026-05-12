@@ -178,8 +178,8 @@ int main()
 
     unsigned char *hostPixels = new unsigned char[screenWidth * screenHeight * 4];
 
-    initDevicePixel(screenWidth, screenHeight);
-    initScene(mode.perfTest);
+    initDevicePixel(settings);
+    initScene(mode, settings);
 
     bool bKeyPressed = false;
     bool tKeyPressed = false;
@@ -199,7 +199,7 @@ int main()
         if (bKeyDown && !bKeyPressed)
         {
             mode.useBVH = !mode.useBVH;
-            resetAccumulation();
+            resetAccumulation(settings);
         }
         bKeyPressed = bKeyDown;
 
@@ -207,8 +207,8 @@ int main()
         if (tKeyDown && !tKeyPressed)
         {
             mode.perfTest = !mode.perfTest;
-            initScene(mode.perfTest);
-            resetAccumulation();
+            initScene(mode, settings);
+            resetAccumulation(settings);
         }
         tKeyPressed = tKeyDown;
 

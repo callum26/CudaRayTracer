@@ -1010,8 +1010,13 @@ __device__ uchar4 toneMappedPixel(Vec3 *accumulation, int pixelIndex, int frameI
     return make_uchar4(finalR, finalG, finalB, 255);
 }
 
-__global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accumulation, int frameIndex, int screenWidth, int screenHeight, BVHNode *bvhNodes, int *bvhObjects, Object *objects, bool useBVH, SceneSettings settings)
+__global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accumulation, int frameIndex, BVHNode *bvhNodes, int *bvhObjects, Object *objects, SceneSettings settings, CurrentMode mode)
 {
+    const int screenWidth = settings.screenWidth;
+    const int screenHeight = settings.screenHeight;
+    const int samplesPerPixel = settings.samplesPerPixel;
+    bool useBVH = mode.useBVH;
+
     int pixelX = blockIdx.x * blockDim.x + threadIdx.x;
     int pixelY = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -1138,8 +1143,11 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
 // these functions now help avoid mem being allocated everyframe
 // mem init at the start before launchraytracer loop is executed with main.cpp
 // and cleared when it ends
-void initDevicePixel(int w, int h)
+void initDevicePixel(ScreenSize settings)
 {
+    const int w = settings.screenWidth;
+    const int h = settings.screenHeight;
+
     // cuda malloc takes additionress of devicepixels storing the size needed as W * H * 4 as RGBA of each pixel
     // 4 removed as changed to uchar4 storage need size of it tho
     cudaMalloc(&devicePixels, w * h * sizeof(uchar4));
@@ -1218,8 +1226,12 @@ inline void addQuadAsTwoTriangles(Object *objects, int &objectCount, const Vec3 
 // additioned init scene to prevent reloading the scene
 // H prefix meaning host
 /*MAYBE MAKE THIS MORE CLEAR*/
-void initScene(CurrentMode mode)
+void initScene(CurrentMode mode, SceneSettings settings)
 {
+    bool perfTest = mode.perfTest;
+    const int screenWidth = settings.screenWidth;
+    const int screenHeight = settings.screenHeight;
+
     clearTemporalAccumulation();
 
     Light Hlight = {
@@ -1370,9 +1382,9 @@ void initScene(CurrentMode mode)
 }
 
 // reset frames when swithcing from bvh to brute force
-void resetAccumulation()
+void resetAccumulation(SceneSettings settings)
 {
-    cudaMemset(deviceAccumulation, 0, screenWidth * screenHeight * sizeof(Vec3));
+    cudaMemset(deviceAccumulation, 0, settings.screenWidth * settings.screenHeight * sizeof(Vec3));
     frameIndex = 0;
 }
 
@@ -1401,7 +1413,7 @@ float launchRayTracer(void *hostPixels, SceneSettings settings, CurrentMode mode
 
     // begins once the kernel is launch
     cudaEventRecord(start);
-    renderKernel<<<gridSize, blockSize>>>(devicePixels, deviceRngStates, deviceAccumulation, frameIndex, screenWidth, screenHeight, deviceBvhNodes, deviceBvhObjects, deviceObjects, useBVH, settings);
+    renderKernel<<<gridSize, blockSize>>>(devicePixels, deviceRngStates, deviceAccumulation, frameIndex, deviceBvhNodes, deviceBvhObjects, deviceObjects, settings, mode);
     cudaEventRecord(stop);
 
     frameIndex++;

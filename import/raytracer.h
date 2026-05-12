@@ -19,12 +19,12 @@ struct CurrentMode
 
 float launchRayTracer(void *hostPixels, SceneSettings settings, CurrentMode mode);
 
-void initDevicePixel(int screenWidth, int screenHeight);
+void initDevicePixel(SceneSettings settings);
 void freeDevicePixels();
 
 // either new performance test or regualr scene
-void initScene(bool perfTest);
+void initScene(CurrentMode mode, SceneSettings settings);
 
-void resetAccumulation();
+void resetAccumulation(SceneSettings settings);
 
 #endif
