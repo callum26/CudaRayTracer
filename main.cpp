@@ -2,8 +2,57 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <fstream>
+#include <cstdio>
 #include <sstream>
 #include "raytracer.h"
+#include <vector>
+#include <iomanip>
+
+const int benchmarkFrameCount = 500;
+
+struct FrameData
+{
+    int index;
+    float currentFps;
+    float gpuMs;
+    float totalMs;
+    SceneSettings settings;
+    CurrentMode mode;
+};
+
+void exportToCsv(const std::string &name, const std::vector<FrameData> &data)
+{
+    std::ofstream file(name);
+
+    if (!file.is_open())
+    {
+        printf("failed to open for writing");
+        return;
+    }
+
+    if (data.empty())
+    {
+        printf("no data to export");
+        return;
+    }
+
+    SceneSettings initSettings = data[0].settings;
+    CurrentMode initMode = data[0].mode;
+    file << "maxBounces,maxShadowBounces,samplesPerPixel,lightSamples,screenWidth,screenHeight,useBVH,perfTest\n";
+    file << initSettings.maxBounces << "," << initSettings.maxShadowBounces << "," << initSettings.samplesPerPixel
+         << "," << initSettings.lightSamples << "," << initSettings.screenWidth << "," << initSettings.screenHeight
+         << "," << (initMode.useBVH ? 1 : 0) << "," << (initMode.perfTest ? 1 : 0) << "\n";
+
+    file << "frameIndex,fps, gpuMs,totalMs\n";
+    file << std::fixed << std::setprecision(2);
+
+    for (const auto &f : data)
+    {
+        file << f.index << "," << f.currentFps << "," << f.gpuMs << "," << f.totalMs << "," << "\n";
+    }
+
+    printf("Exported 500 frames to %s\n", name.c_str());
+}
 
 const unsigned int screenWidth = 800;
 const unsigned int screenHeight = 800;
@@ -187,6 +236,12 @@ int main()
     float frameCount = 0;
     float accumulatedGpuMs = 0.0f;
     float accumulatedTotalMs = 0.0f;
+    float avgFps = 0.0f;
+
+    std::vector<FrameData> benchmarkData;
+    benchmarkData.reserve(benchmarkFrameCount);
+
+    bool benchmarkFinished = false;
 
     while (!glfwWindowShouldClose(win))
     {
@@ -238,6 +293,17 @@ int main()
         accumulatedTotalMs += totalMs;
         frameCount++;
         statsTimer += totalMs / 1000.0f;
+        float currentFps = 1000.0f / (accumulatedTotalMs / frameCount);
+
+        if (!benchmarkFinished)
+        {
+            benchmarkData.push_back({(int)benchmarkData.size(), currentFps, gpuMs, totalMs, settings, mode});
+            if (benchmarkData.size() >= benchmarkFrameCount)
+            {
+                exportToCsv("frame_metrics.csv", benchmarkData);
+                benchmarkFinished = true;
+            }
+        }
 
         if (statsTimer >= 0.5)
         {
