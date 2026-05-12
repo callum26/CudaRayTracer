@@ -1,5 +1,7 @@
 #ifndef BVH_CUH
 #define BVH_CUH
+#define CUDART_NINF __int_as_float(0x7f800000)
+#define CUDART_NINF __int_as_float(0xff800000)
 
 #include <cuda_runtime.h>
 #include "structs.h"
@@ -58,8 +60,8 @@ __host__ __device__ float getAxisComponent(const Vec3 &vector, int axisIndex)
 __host__ __device__ AABB emptyAABB()
 {
     AABB box;
-    box.boxMin = {INFINITY, INFINITY, INFINITY};
-    box.boxMax = {-INFINITY, -INFINITY, -INFINITY};
+    box.boxMin = {CUDART_INF, CUDART_INF, CUDART_INF};
+    box.boxMax = {CUDART_NINF, CUDART_NINF, CUDART_NINF};
     return box;
 }
 
@@ -99,7 +101,7 @@ __host__ __device__ float surfaceAreaAABB(const AABB &box)
     return 2.0f * (extent.x * extent.y + extent.x * extent.z + extent.y * extent.z);
 }
 
-__device__ bool hitAABB(const Ray &ray, const AABB &box, float maxDistance = INFINITY)
+__device__ bool hitAABB(const Ray &ray, const AABB &box, float maxDistance = CUDART_INF)
 {
     // simialr to our ray intersection we need to find
     // the ray distance min and max to find where we should focus the intersection on
@@ -254,7 +256,7 @@ __host__ int buildBVH(BuildObject *objs, int start, int end, BVHNode *nodes, int
 
     // now finding best split
     // init extreme values
-    float bestCost = INFINITY;
+    float bestCost = CUDART_INF;
     int bestAxis = -1;
     int bestSplit = -1;
 

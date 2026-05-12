@@ -1,10 +1,14 @@
 #include <cuda_runtime.h>
 #include <cmath>
+#include <cfloat>
 #include <math_constants.h>
 #include <curand_kernel.h>
 #include "raytracer.h"
 #include "structs.h"
 #include "bvh.cuh"
+
+#define CUDART_INF __int_as_float(0x7f800000)
+#define CUDART_NINF __int_as_float(0xff800000)
 
 // consts for gpu prevents recopying
 // no more array constas too expensive
@@ -291,7 +295,7 @@ __device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BV
     stack[stackPtr++] = bvhRootIndex;
 
     // A
-    float closest = INFINITY;
+    float closest = CUDART_INF;
     int closestIdx = -1; // wich obj clostest
 
     // keep going till stack empty
@@ -330,7 +334,7 @@ __device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BV
                 int objIdx = bvhObjects[node.firstObject + i];
 
                 //  then do normal ray interset with each obj within the box
-                float dist = INFINITY;
+                float dist = CUDART_INF;
                 // split into two funcs one for tri and one for sphere easier to check for object type then within one equation
                 bool objectRayIntersect = objects[objIdx].type == triangleObject
                                               ? rayIntersectTriangle(ray, objects[objIdx].triangle, dist)
@@ -367,12 +371,12 @@ __device__ bool rayCastBVH(const Ray &ray, float &distance, int &objectIndex, BV
 // og code for testing old brute force
 __device__ bool rayCastObjects(const Ray &ray, float &distance, int &objectIndex, Object *objects)
 {
-    float closest = INFINITY;
+    float closest = CUDART_INF;
     int closestIdx = -1;
 
     for (int i = 0; i < objectCount; i++)
     {
-        float dist = INFINITY;
+        float dist = CUDART_INF;
         bool objectRayIntersect = objects[i].type == triangleObject
                                       ? rayIntersectTriangle(ray, objects[i].triangle, dist)
                                       : rayIntersectSphere(ray, objects[i].sphere, dist);
@@ -395,12 +399,12 @@ __device__ bool rayCastObjects(const Ray &ray, float &distance, int &objectIndex
 // og code for testing old brute force shadow
 __device__ bool rayCastShadowObjects(const Ray &ray, float &hitDistance, int &objectIndex, Object *objects, float maxDist)
 {
-    float closest = INFINITY;
+    float closest = CUDART_INF;
     int closestIdx = -1;
 
     for (int i = 0; i < objectCount; i++)
     {
-        float dist = INFINITY;
+        float dist = CUDART_INF;
         bool hit = objects[i].type == triangleObject
                        ? rayIntersectTriangle(ray, objects[i].triangle, dist)
                        : rayIntersectSphere(ray, objects[i].sphere, dist);
@@ -431,7 +435,6 @@ __device__ bool rayCastShadowBVH(const Ray &ray, float &hitDistance, int &object
 
     // anything beyond light is irrev
     float closest = maxDist;
-    int closestIdx = -1;
 
     // keep going till stack empty
     while (stackPtr > 0)
@@ -457,7 +460,7 @@ __device__ bool rayCastShadowBVH(const Ray &ray, float &hitDistance, int &object
             {
                 int objIdx = bvhObjects[node.firstObject + i];
 
-                float dist = INFINITY;
+                float dist = CUDART_INF;
                 bool hit = objects[objIdx].type == triangleObject
                                ? rayIntersectTriangle(ray, objects[objIdx].triangle, dist)
                                : rayIntersectSphere(ray, objects[objIdx].sphere, dist);
@@ -887,7 +890,7 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
         while (shadowBounces < maxShadowBounces)
         {
             Ray shadowRay = {currentShadowOrigin, shadowDirection, {0.0f, 0.0f, 0.0f}};
-            float shadowHitDistance = INFINITY;
+            float shadowHitDistance = CUDART_INF;
             int shadowHitObject = -1;
 
             bool hitSomething = useBVH
@@ -1059,7 +1062,7 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
 
         for (int i = 0; i < settings.maxBounces; i++)
         {
-            float objectDistance = INFINITY;
+            float objectDistance = CUDART_INF;
             int objectIndex = -1;
 
             if (useBVH)
@@ -1143,7 +1146,7 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
 // these functions now help avoid mem being allocated everyframe
 // mem init at the start before launchraytracer loop is executed with main.cpp
 // and cleared when it ends
-void initDevicePixel(ScreenSize settings)
+void initDevicePixel(SceneSettings settings)
 {
     const int w = settings.screenWidth;
     const int h = settings.screenHeight;
@@ -1396,7 +1399,6 @@ float launchRayTracer(void *hostPixels, SceneSettings settings, CurrentMode mode
     // change to stop destroying events every frame
     const int screenWidth = settings.screenWidth;
     const int screenHeight = settings.screenHeight;
-    bool useBVH = mode.useBVH;
 
     static cudaEvent_t start, stop;
     static bool eventReady = false;
