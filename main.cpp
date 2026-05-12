@@ -5,13 +5,12 @@
 #include <sstream>
 #include "raytracer.h"
 
-// seperated the shader read file compiling and all other host cpp code into a seprate file was causing many issues when trying to boot the ray tracer
-// seperating the code makes it much easier and probably i think more efficient as the cuda compiler was having to deal with
-// both of the logic causing slow downs
-
 const unsigned int screenWidth = 800;
 const unsigned int screenHeight = 800;
 
+// seperated the shader read file compiling and all other host cpp code into a seprate file was causing many issues when trying to boot the ray tracer
+// seperating the code makes it much easier and probably i think more efficient as the cuda compiler was having to deal with
+// both of the logic causing slow downs
 // theses lines are only temporary was just trying to get it running
 // will change later to my code
 // shader read func from https://learnopengl.com/Getting-started/Shaders
@@ -160,12 +159,28 @@ int main()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
     // move the calculation of host pixel buffer solely with cpp
+    SceneSettings settings = {
+        15,  // maxBounces
+        8,   // maxShadowBounces
+        1,   // samplesPerPixel
+        1,   // lightSamples
+        800, // screenWidth
+        800  // screenHeight
+    };
+
+    CurrentMode mode = {
+        true, // useBVH
+        false // perfTest
+    };
+
+    const int screenWidth = settings.screenWidth;
+    const int screenHeight = settings.screenHeight;
+
     unsigned char *hostPixels = new unsigned char[screenWidth * screenHeight * 4];
+
     initDevicePixel(screenWidth, screenHeight);
-    // moved scene init to host
-    bool perfTest = false;
-    initScene(perfTest);
-    bool useBVH = false;
+    initScene(mode.perfTest);
+
     bool bKeyPressed = false;
     bool tKeyPressed = false;
     float statsTimer = 0.0f;
@@ -183,7 +198,7 @@ int main()
         bool bKeyDown = glfwGetKey(win, GLFW_KEY_B) == GLFW_PRESS;
         if (bKeyDown && !bKeyPressed)
         {
-            useBVH = !useBVH;
+            mode.useBVH = !mode.useBVH;
             resetAccumulation();
         }
         bKeyPressed = bKeyDown;
@@ -191,8 +206,8 @@ int main()
         bool tKeyDown = glfwGetKey(win, GLFW_KEY_T) == GLFW_PRESS;
         if (tKeyDown && !tKeyPressed)
         {
-            perfTest = !perfTest;
-            initScene(perfTest);
+            mode.perfTest = !mode.perfTest;
+            initScene(mode.perfTest);
             resetAccumulation();
         }
         tKeyPressed = tKeyDown;
@@ -202,7 +217,7 @@ int main()
         glClear(GL_COLOR_BUFFER_BIT);
 
         // instead of only launching void function it now returns ms time for frames
-        float gpuMs = launchRayTracer(hostPixels, screenWidth, screenHeight, useBVH);
+        float gpuMs = launchRayTracer(hostPixels, settings, mode);
 
         // upload pixel data to texture took this from opengl graphics project in year2
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, screenWidth, screenHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, hostPixels);
@@ -232,7 +247,7 @@ int main()
 
             char title[96];
             // stores it in a suitabke buffer
-            snprintf(title, sizeof(title), "CUDA Ray Tracer | %s | FPS: %6.0f | Frame: %6.2fms | GPU: %6.2fms", useBVH ? "BVH" : "Brute", avgFps, avgTotalMs, avgGpuMs);
+            snprintf(title, sizeof(title), "CUDA Ray Tracer | %s | FPS: %6.0f | Frame: %6.2fms | GPU: %6.2fms", mode.useBVH ? "BVH" : "Brute", avgFps, avgTotalMs, avgGpuMs);
             glfwSetWindowTitle(win, title);
 
             statsTimer = 0.0f;

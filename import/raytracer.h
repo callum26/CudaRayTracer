@@ -1,7 +1,23 @@
 #ifndef RAYTRACER_H
 #define RAYTRACER_H
 
-float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight, bool useBVH);
+struct SceneSettings
+{
+    int maxBounces;
+    int maxShadowBounces;
+    int samplesPerPixel;
+    int lightSamples;
+    int screenWidth;
+    int screenHeight;
+};
+
+struct CurrentMode
+{
+    bool useBVH;
+    bool perfTest;
+};
+
+float launchRayTracer(void *hostPixels, SceneSettings settings, CurrentMode mode);
 
 void initDevicePixel(int screenWidth, int screenHeight);
 void freeDevicePixels();

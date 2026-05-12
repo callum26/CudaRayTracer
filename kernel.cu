@@ -6,9 +6,6 @@
 #include "structs.h"
 #include "bvh.cuh"
 
-const unsigned int screenWidth = 800;
-const unsigned int screenHeight = 800;
-
 // consts for gpu prevents recopying
 // no more array constas too expensive
 __constant__ Light light;
@@ -841,9 +838,10 @@ __device__ void processOpaqueRay(Ray &ray, Vec3 surfaceNormal, curandState &rng)
 }
 
 /*ADD SPECULAR LIGHT TRANSPARENT OBJ SPECULAR I THINK SURELY?*/
-__device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float objectDistance, int objectIndex, curandState *rng, Vec3 surfaceNormal, BVHNode *bvhNodes, int *bvhObjects, Object *objects, Vec3 strengthOfRay, bool useBVH)
+__device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float objectDistance, int objectIndex, curandState *rng, Vec3 surfaceNormal, BVHNode *bvhNodes, int *bvhObjects, Object *objects, Vec3 strengthOfRay, bool useBVH, SceneSettings settings)
 {
-    const int lightSamples = 1;
+    const int maxShadowBounces = settings.maxShadowBounces;
+    const int lightSamples = settings.lightSamples;
 
     Ray shadeRay = ray;
     shadeRay.hitPoint = shadeRay.origin + (shadeRay.direction * objectDistance);
@@ -881,7 +879,6 @@ __device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float ob
 
         // vars for shadow bounces
         int shadowBounces = 0;
-        const int maxShadowBounces = 8;
         bool blocked = false;
 
         int insideObjectIndex = -1; // -1 meansn air
@@ -1013,7 +1010,7 @@ __device__ uchar4 toneMappedPixel(Vec3 *accumulation, int pixelIndex, int frameI
     return make_uchar4(finalR, finalG, finalB, 255);
 }
 
-__global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accumulation, int frameIndex, int screenWidth, int screenHeight, BVHNode *bvhNodes, int *bvhObjects, Object *objects, bool useBVH)
+__global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accumulation, int frameIndex, int screenWidth, int screenHeight, BVHNode *bvhNodes, int *bvhObjects, Object *objects, bool useBVH, SceneSettings settings)
 {
     int pixelX = blockIdx.x * blockDim.x + threadIdx.x;
     int pixelY = blockIdx.y * blockDim.y + threadIdx.y;
@@ -1030,11 +1027,9 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
     int pixelIndex = (writeRow * screenWidth + pixelX);
     curandState rng = rngStates[pixelIndex];
 
-    const int samplesPerPixel = 1;
-
     Vec3 postSampleColour = {0.0f, 0.0f, 0.0f};
 
-    for (int s = 0; s < samplesPerPixel; s++)
+    for (int s = 0; s < settings.samplesPerPixel; s++)
     {
         float randomJitterX = curand_uniform(&rng) - 0.5f;
         float randomJitterY = curand_uniform(&rng) - 0.5f;
@@ -1053,13 +1048,11 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
         // every time ray bounces its strength is reduced
         Vec3 pixelColour = {0.0f, 0.0f, 0.0f};
         Vec3 strengthOfRay = {1.0f, 1.0f, 1.0f};
-        const int maxBounce = 15;
-
         // beers law tracking
         int insideObjectIndex = -1; // -1 meansn air
         Vec3 insideEntryPoint = {0.0f, 0.0f, 0.0f};
 
-        for (int i = 0; i < maxBounce; i++)
+        for (int i = 0; i < settings.maxBounces; i++)
         {
             float objectDistance = INFINITY;
             int objectIndex = -1;
@@ -1113,7 +1106,7 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
                 if (hitObject.material.transparency > 0.0f)
                     strengthOfRay = strengthOfRay * (1.0f / fmaxf(0.001f, 1.0f - hitObject.material.transparency));
 
-                Vec3 hitColour = postShadingColour(ray, hitObject, objectDistance, objectIndex, &rng, surfaceNormal, bvhNodes, bvhObjects, objects, strengthOfRay, useBVH);
+                Vec3 hitColour = postShadingColour(ray, hitObject, objectDistance, objectIndex, &rng, surfaceNormal, bvhNodes, bvhObjects, objects, strengthOfRay, useBVH, settings);
                 pixelColour = pixelColour + (hitColour * strengthOfRay);
 
                 // calcs via opaque ray function simples the code
@@ -1161,6 +1154,31 @@ void freeDevicePixels()
     cudaFree(deviceAccumulation);
 }
 
+void clearTemporalAccumulation()
+{
+    // free up previous device scene data due to switching scenes now possible
+    if (deviceRngStates)
+    {
+        cudaFree(deviceRngStates);
+        deviceRngStates = nullptr;
+    }
+    if (deviceBvhNodes)
+    {
+        cudaFree(deviceBvhNodes);
+        deviceBvhNodes = nullptr;
+    }
+    if (deviceBvhObjects)
+    {
+        cudaFree(deviceBvhObjects);
+        deviceBvhObjects = nullptr;
+    }
+    if (deviceObjects)
+    {
+        cudaFree(deviceObjects);
+        deviceObjects = nullptr;
+    }
+}
+
 inline void addSphere(Object *objects, int &objectCount, const Vec3 &pos, const Material &mat, const float &radius)
 {
     objects[objectCount].sphere.position = pos;
@@ -1200,8 +1218,10 @@ inline void addQuadAsTwoTriangles(Object *objects, int &objectCount, const Vec3 
 // additioned init scene to prevent reloading the scene
 // H prefix meaning host
 /*MAYBE MAKE THIS MORE CLEAR*/
-void initScene(bool perfTest)
+void initScene(CurrentMode mode)
 {
+    clearTemporalAccumulation();
+
     Light Hlight = {
         {0.0f, 2.75f, -5.0f},  // position
         {0.35f, 0.35f, 0.32f}, // ambientIntensity
@@ -1210,28 +1230,6 @@ void initScene(bool perfTest)
         5.0f,                  // lightIntensity
         0.55f                  // lightradiuys
     };
-
-    // free up previous device scene data due to switching scenes now possible
-    if (deviceRngStates)
-    {
-        cudaFree(deviceRngStates);
-        deviceRngStates = nullptr;
-    }
-    if (deviceBvhNodes)
-    {
-        cudaFree(deviceBvhNodes);
-        deviceBvhNodes = nullptr;
-    }
-    if (deviceBvhObjects)
-    {
-        cudaFree(deviceBvhObjects);
-        deviceBvhObjects = nullptr;
-    }
-    if (deviceObjects)
-    {
-        cudaFree(deviceObjects);
-        deviceObjects = nullptr;
-    }
 
     int MAX_OBJECTS = perfTest ? 1024 : 256;
 
@@ -1254,11 +1252,8 @@ void initScene(bool perfTest)
     Material sphereAmber = {{0.98f, 0.98f, 0.98f}, 0.05f, 0.10f, 0.95f, 128.0f, 1.0f, 1.45f, {0.08f, 0.40f, 0.95f}, {0.0f, 0.0f, 0.0f}};
     // lighting fixture
 
-    //
-    //
-    //
     // choose between performance test scene
-    if (perfTest)
+    if (mode.perfTest)
     {
         // PERFORMANCE TEST 10x10x10
         for (int x = 0; x < 10; x++)
@@ -1374,12 +1369,23 @@ void initScene(bool perfTest)
     delete[] HbvhObjects;
 }
 
-float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight, bool useBVH)
+// reset frames when swithcing from bvh to brute force
+void resetAccumulation()
+{
+    cudaMemset(deviceAccumulation, 0, screenWidth * screenHeight * sizeof(Vec3));
+    frameIndex = 0;
+}
+
+float launchRayTracer(void *hostPixels, SceneSettings settings, CurrentMode mode)
 {
     // https://developer.nvidia.com/blog/how-implement-performance-metrics-cuda-cc/
     // as mentioned on the nvidia blog its better to use the inbuilt functions for timings in cuda instead of cpu itmings
     // the way on the blog is the best way to go about it
     // change to stop destroying events every frame
+    const int screenWidth = settings.screenWidth;
+    const int screenHeight = settings.screenHeight;
+    bool useBVH = mode.useBVH;
+
     static cudaEvent_t start, stop;
     static bool eventReady = false;
     if (!eventReady)
@@ -1395,7 +1401,7 @@ float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight, bool 
 
     // begins once the kernel is launch
     cudaEventRecord(start);
-    renderKernel<<<gridSize, blockSize>>>(devicePixels, deviceRngStates, deviceAccumulation, frameIndex, screenWidth, screenHeight, deviceBvhNodes, deviceBvhObjects, deviceObjects, useBVH);
+    renderKernel<<<gridSize, blockSize>>>(devicePixels, deviceRngStates, deviceAccumulation, frameIndex, screenWidth, screenHeight, deviceBvhNodes, deviceBvhObjects, deviceObjects, useBVH, settings);
     cudaEventRecord(stop);
 
     frameIndex++;
@@ -1408,10 +1414,4 @@ float launchRayTracer(void *hostPixels, int screenWidth, int screenHeight, bool 
     cudaEventElapsedTime(&ms, start, stop);
 
     return ms;
-}
-// reset frames when swithcing from bvh to brute force
-void resetAccumulation()
-{
-    cudaMemset(deviceAccumulation, 0, screenWidth * screenHeight * sizeof(Vec3));
-    frameIndex = 0;
 }
