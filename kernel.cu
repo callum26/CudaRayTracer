@@ -7,9 +7,6 @@
 #include "structs.h"
 #include "bvh.cuh"
 
-#define CUDART_INF CUDART_INF_F
-#define CUDART_NINF (-CUDART_INF_F)
-
 // consts for gpu prevents recopying
 // no more array constas too expensive
 __constant__ Light light;

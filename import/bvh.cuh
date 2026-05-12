@@ -2,10 +2,8 @@
 #define BVH_CUH
 
 #include <cuda_runtime.h>
+#include <math_constants.h>
 #include "structs.h"
-
-#define CUDART_INF CUDART_INF_F
-#define CUDART_NINF (-CUDART_INF_F)
 
 // com of bounding box quite simple
 __host__ __device__ Vec3 centroidAABB(const AABB &box)
