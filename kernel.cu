@@ -7,8 +7,8 @@
 #include "structs.h"
 #include "bvh.cuh"
 
-#define CUDART_INF __int_as_float(0x7f800000)
-#define CUDART_NINF __int_as_float(0xff800000)
+#define CUDART_INF CUDART_INF_F
+#define CUDART_NINF (-CUDART_INF_F)
 
 // consts for gpu prevents recopying
 // no more array constas too expensive
