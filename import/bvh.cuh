@@ -1,6 +1,6 @@
 #ifndef BVH_CUH
 #define BVH_CUH
-#define CUDART_NINF __int_as_float(0x7f800000)
+#define CUDART_INF __int_as_float(0x7f800000)
 #define CUDART_NINF __int_as_float(0xff800000)
 
 #include <cuda_runtime.h>
