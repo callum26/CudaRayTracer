@@ -29,6 +29,9 @@ static Object *deviceObjects = nullptr;
 // cur frames
 static int frameIndex = 0;
 
+__device__ unsigned long long deviceBounceTotal = 0;
+__device__ unsigned long long deviceRayTotal = 0;
+
 // from my reading on https://www.scratchapixel.com/lessons/3d-basic-rendering/minimal-ray-tracer-rendering-simple-shapes/ray-sphere-intersection
 // ray defoed as ray(t) = Origin + t * Direction
 // Origin (ray.origin)
@@ -1057,8 +1060,10 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
         int insideObjectIndex = -1; // -1 meansn air
         Vec3 insideEntryPoint = {0.0f, 0.0f, 0.0f};
 
+        int bounceCount = 0;
         for (int i = 0; i < settings.maxBounces; i++)
         {
+            bounceCount++;
             float objectDistance = CUDART_INF;
             int objectIndex = -1;
 
@@ -1129,6 +1134,8 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
             }
         }
         postSampleColour = postSampleColour + pixelColour;
+        atomicAdd(&deviceBounceTotal, (unsigned long long)bounceCount);
+        atomicAdd(&deviceRayTotal, 1ULL);
     }
 
     // change storing of pixel buffer to use the cuda uchar4
@@ -1425,4 +1432,10 @@ float launchRayTracer(void *hostPixels, SceneSettings settings, CurrentMode mode
     cudaEventElapsedTime(&ms, start, stop);
 
     return ms;
+}
+
+void getBounceStats(unsigned long long &totalBounces, unsigned long long &totalRays)
+{
+    cudaMemcpyFromSymbol(&totalBounces, deviceBounceTotal, sizeof(unsigned long long));
+    cudaMemcpyFromSymbol(&totalRays, deviceRayTotal, sizeof(unsigned long long));
 }

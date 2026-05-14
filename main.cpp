@@ -302,6 +302,21 @@ int main()
             {
                 exportToCsv("frame_metrics.csv", benchmarkData);
                 benchmarkFinished = true;
+
+                unsigned long long totalBounces = 0;
+                unsigned long long totalRays = 0;
+
+                getBounceStats(totalBounces, totalRays);
+
+                if (totalRays <= 0)
+                    return;
+
+                double avgBounces = (double)totalBounces / totalRays;
+
+                printf("Benchmark Finished!\n");
+                printf("Total rays: %llu\n", totalRays);
+                printf("Total bounces: %llu\n", totalBounces);
+                printf("Average bounces per ray: %.2f\n\n", avgBounces);
             }
         }
 
