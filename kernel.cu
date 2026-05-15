@@ -1276,12 +1276,12 @@ void initScene(CurrentMode mode, SceneSettings settings)
     // choose between performance test scene
     if (mode.perfTest)
     {
-        // PERFORMANCE TEST 10x10x10
-        for (int x = 0; x < 10; x++)
+        // PERFORMANCE TEST gridSize x gridSize x gridSize
+        for (int x = 0; x < gridSize; x++)
         {
-            for (int y = 0; y < 10; y++)
+            for (int y = 0; y < gridSize; y++)
             {
-                for (int z = 0; z < 10; z++)
+                for (int z = 0; z < gridSize; z++)
                 {
                     Vec3 pos = {-3.0f + x * 0.55f, -2.5f + y * 0.55f, -3.0f - z * 0.55f};
                     addSphere(Hobjects, HobjectCount, pos, sphereDiffuse, 0.20f);
@@ -1395,6 +1395,39 @@ void resetAccumulation(SceneSettings settings)
 {
     cudaMemset(deviceAccumulation, 0, settings.screenWidth * settings.screenHeight * sizeof(Vec3));
     frameIndex = 0;
+}
+
+// New API: render directly into a provided device pointer (e.g. mapped PBO)
+float launchRayTracerToDevice(void *devicePixels, SceneSettings settings, CurrentMode mode)
+{
+    const int screenWidth = settings.screenWidth;
+    const int screenHeight = settings.screenHeight;
+
+    static cudaEvent_t start, stop;
+    static bool eventReady = false;
+    if (!eventReady)
+    {
+        cudaEventCreate(&start);
+        cudaEventCreate(&stop);
+        eventReady = true;
+    }
+
+    dim3 blockSize(16, 16);
+    dim3 gridSize((screenWidth + blockSize.x - 1) / blockSize.x, (screenHeight + blockSize.y - 1) / blockSize.y);
+
+    cudaEventRecord(start);
+    uchar4 *devPixels = (uchar4 *)devicePixels;
+    renderKernel<<<gridSize, blockSize>>>(devPixels, deviceRngStates, deviceAccumulation, frameIndex, deviceBvhNodes, deviceBvhObjects, deviceObjects, settings, mode);
+    cudaEventRecord(stop);
+
+    frameIndex++;
+
+    cudaEventSynchronize(stop);
+
+    float ms = 0;
+    cudaEventElapsedTime(&ms, start, stop);
+
+    return ms;
 }
 
 float launchRayTracer(void *hostPixels, SceneSettings settings, CurrentMode mode)

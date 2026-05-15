@@ -1,6 +1,8 @@
-#include <string>
+﻿#include <string>
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
+#include <cuda_runtime.h>
+#include <cuda_gl_interop.h>
 #include <fstream>
 #include <cstdio>
 #include <sstream>
@@ -8,6 +10,7 @@
 #include <array>
 #include <vector>
 #include <iomanip>
+#include <future>
 
 // for image creating 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -23,6 +26,12 @@ struct FrameData
     float totalMs;
     SceneSettings settings;
     CurrentMode mode;
+};
+
+
+struct OutputNames {
+    std::string csvName;
+    std::array<std::string, 4> convergePng;
 };
 
 void exportToCsv(const std::string &name, const std::vector<FrameData> &data)
@@ -41,6 +50,19 @@ void exportToCsv(const std::string &name, const std::vector<FrameData> &data)
         return;
     }
 
+    unsigned long long totalBounces = 0;
+    unsigned long long totalRays = 0;
+
+    getBounceStats(totalBounces, totalRays);
+
+    if (totalRays <= 0)
+    {
+        printf("no rays?");
+        return;
+    }
+
+    double avgBounces = (double)totalBounces / totalRays;
+
     SceneSettings initSettings = data[0].settings;
     CurrentMode initMode = data[0].mode;
     file << "maxBounces,maxShadowBounces,samplesPerPixel,lightSamples,screenWidth,screenHeight,useBVH,perfTest,gridSize\n";
@@ -55,6 +77,10 @@ void exportToCsv(const std::string &name, const std::vector<FrameData> &data)
 
         file << f.index << "," << f.currentFps << "," << f.gpuMs << "," << f.totalMs << "," << "\n";
     }
+
+    file << "Total Rays,Total Bounces,Average Bounces Per Ray\n";
+    file << totalRays << "," << totalBounces << "," << avgBounces << "\n";
+    
 
     printf("Exported 500 frames to %s\n", name.c_str());
 }
@@ -125,8 +151,8 @@ unsigned int createProgram(const char *vpath, const char *fpath)
     return p;
 }
 
-int main()
-{
+// move outside main we can use key proeprlly
+namespace fullState {
     // move the calculation of host pixel buffer solely with cpp
     SceneSettings settings = {
         15,  // maxBounces
@@ -134,29 +160,46 @@ int main()
         1,   // samplesPerPixel
         1,   // lightSamples
         800, // screenWidth
-        800,  // screenHeight
-        10 // grid size
+        800, // screenHeight
+        10,  // grid size
     };
 
     CurrentMode mode = {
-        true, // useBVH
-        false // perfTest
+        false, // useBVH
+        false, // perfTest
     };
+}
 
-    const int screenWidth = settings.screenWidth;
-    const int screenHeight = settings.screenHeight;
-    const int convergeAt[] = {1, 64, 512, 4096};
+// move keys to an event driven input callback
+void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods){
+    if (action != GLFW_PRESS) return;
+    
+    switch(key){
+        case GLFW_KEY_ESCAPE:
+            glfwSetWindowShouldClose(window, true);
+            break;
+        case GLFW_KEY_B:
+            fullState::mode.useBVH = !fullState::mode.useBVH;
+            resetAccumulation(fullState::settings);
+            break;
+        case GLFW_KEY_T:
+            fullState::mode.perfTest = !fullState::mode.perfTest;
+            resetAccumulation(fullState::settings);
+            break;
+    }
+}
 
-    std::string csvName = std::string("bench_")
+OutputNames findFileNames(const SceneSettings &settings, const CurrentMode &mode, const int convergeAt[]){
+    OutputNames names;
+    names.csvName = std::string("bench_")
         + (mode.perfTest ? "perftest" : "cornell") + "_"
         + (mode.useBVH   ? "bvh"      : "brute")
-        + "_" + std::to_string(screenWidth) + "x" + std::to_string(screenHeight)
-        + "_b"  + std::to_string(settings.maxBounces) + "_ls" + std::to_string(settings.lightSamples)
+        + "_" + std::to_string(settings.screenWidth) + "x" + std::to_string(settings.screenHeight)
+        + "_b"  + std::to_string(settings.maxBounces) + "_sb" + std::to_string(settings.maxShadowBounces) +  "_ls" + std::to_string(settings.lightSamples)
         + "_spp" + std::to_string(settings.samplesPerPixel) + (mode.perfTest ? "_gs" + std::to_string(settings.perfTestGridSize) : "") + ".csv";
- 
+
     // change file name based on what we r doing
-    std::array<std::string, 4> convergePng;
-    for (size_t i = 0; i < convergePng.size(); ++i)
+    for (size_t i = 0; i < names.convergePng.size(); ++i)
     {
         std::ostringstream name;
 
@@ -165,25 +208,43 @@ int main()
              << "_ls" << settings.lightSamples << "_" << settings.screenWidth << "x" << settings.screenHeight
              << "_frame" << convergeAt[i] << ".png";
 
-        convergePng[i] = name.str();
+        names.convergePng[i] = name.str();
     }
+    return names;
+}
 
-    bool benchmarkFinished = false;
-    int convergeIdx = 0;
+
+int main()
+{
+    SceneSettings settings = fullState::settings;
+    CurrentMode mode = fullState::mode;
+    
     int accumFrame = 0; // counts every rendered frame from startup
 
+    const int screenWidth = settings.screenWidth;
+    const int screenHeight = settings.screenHeight;
+    const int convergeAt[] = {1, 64, 512, 4096};
+    int convergeIdx = 0;
+
+    bool benchmarkFinished = false;
     std::vector<FrameData> benchmarkData;
     benchmarkData.reserve(benchmarkFrameCount);
+
+    OutputNames names = findFileNames(settings, mode, convergeAt);
+    std::string csvName = names.csvName;
+    std::array<std::string, 4> convergePng = names.convergePng;
+    
     
     if (!glfwInit())
         return -1;
 
-    // set opengl version 3.3 core
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    // set opengl version 4.6
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
     GLFWwindow *win = glfwCreateWindow(screenWidth, screenHeight, "CUDA Ray Tracer", NULL, NULL);
+    
 
     if (!win)
     {
@@ -192,9 +253,9 @@ int main()
     }
 
     glfwMakeContextCurrent(win);
+    glfwSwapInterval(0); // turn off vsync
 
-    // turn off vsync
-    glfwSwapInterval(0);
+    glfwSetKeyCallback(win, keyCallback);
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
     {
@@ -252,54 +313,86 @@ int main()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-    unsigned char *hostPixels = new unsigned char[screenWidth * screenHeight * 4];
+    // https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/graphics-interop.html
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, screenWidth, screenHeight);
+
+    // create PBO and register with CUDA
+    GLuint pbo = 0;
+    cudaGraphicsResource* cudaPbo = nullptr;
+
+    // same as before
+    glGenBuffers(1, &pbo);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo);
+    glBufferData(GL_PIXEL_UNPACK_BUFFER, screenWidth * screenHeight * sizeof(uint8_t) * 4, nullptr, GL_STREAM_DRAW);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+
+    // register PBO with CUDA 
+    cudaError_t cErr = cudaGraphicsGLRegisterBuffer(&cudaPbo, pbo, cudaGraphicsMapFlagsWriteDiscard);
+    
+    if (cErr != cudaSuccess) {
+        fprintf(stderr, "cudaGraphicsGLRegisterBuffer failed: %s\n", cudaGetErrorString(cErr));
+        cudaPbo = nullptr;
+    }
+
+    // cast to vector instead of using pointer
+    std::vector<unsigned char> hostPixels(screenWidth * screenHeight * 4);
     stbi_flip_vertically_on_write(1);
+
     initDevicePixel(settings);
     initScene(mode, settings);
 
-    bool bKeyPressed = false;
-    bool tKeyPressed = false;
     float statsTimer = 0.0f;
     float frameCount = 0;
     float accumulatedGpuMs = 0.0f;
     float accumulatedTotalMs = 0.0f;
     float avgFps = 0.0f;
 
-    
-
     while (!glfwWindowShouldClose(win))
     {
         float frameStart = glfwGetTime();
-
-        if (glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-            glfwSetWindowShouldClose(win, true);
-
-        bool bKeyDown = glfwGetKey(win, GLFW_KEY_B) == GLFW_PRESS;
-        if (bKeyDown && !bKeyPressed)
-        {
-            mode.useBVH = !mode.useBVH;
-            resetAccumulation(settings);
-        }
-        bKeyPressed = bKeyDown;
-
-        bool tKeyDown = glfwGetKey(win, GLFW_KEY_T) == GLFW_PRESS;
-        if (tKeyDown && !tKeyPressed)
-        {
-            mode.perfTest = !mode.perfTest;
-            initScene(mode, settings);
-            resetAccumulation(settings);
-        }
-        tKeyPressed = tKeyDown;
 
         // clear screen
         glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // instead of only launching void function it now returns ms time for frames
-        float gpuMs = launchRayTracer(hostPixels, settings, mode);
+        cudaGraphicsMapResources(1, &cudaPbo, 0);
 
-        // upload pixel data to texture took this from opengl graphics project in year2
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, screenWidth, screenHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, hostPixels);
+        uchar4 *devPtr = nullptr;
+        size_t mappedSize = 0;
+        cudaGraphicsResourceGetMappedPointer((void **)&devPtr, &mappedSize, cudaPbo);
+
+        // kernel writing directly into mapped PBO memory
+        float gpuMs = launchRayTracerToDevice((void *)devPtr, settings, mode);
+
+        // if we need to save this frame to PNG copy device to host while mapped
+        if (convergeIdx < 4 && accumFrame == convergeAt[convergeIdx] && mode.useBVH)
+        {
+            // async copy frame data
+            cudaMemcpy(hostPixels.data(), devPtr, screenWidth * screenHeight * 4, cudaMemcpyDeviceToHost);
+            
+            // local copy of the buffer so the background thread owns it
+            std::vector<unsigned char> asyncPixels = hostPixels; 
+            // fetch png name
+            std::string currentPngName = convergePng[convergeIdx];
+
+            // before was casuing massive performance spikes skewing results
+            // create seperate thread
+            std::thread([asyncPixels, currentPngName, screenWidth, screenHeight]() {
+                if (stbi_write_png(currentPngName.c_str(), screenWidth, screenHeight, 4, asyncPixels.data(), screenWidth * 4)) {
+                    printf("Saved %s\n", currentPngName.c_str());
+                }
+            }).detach();
+
+            convergeIdx++;
+        }
+
+        cudaGraphicsUnmapResources(1, &cudaPbo, 0);
+
+        // upload is now just a tex sub image from the bound PBO
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, screenWidth, screenHeight, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 
         // draw textured quad
         glUseProgram(prog);
@@ -311,16 +404,7 @@ int main()
         glfwSwapBuffers(win);
         glfwPollEvents();
 
-        // only save ss in cornell run
-        if (convergeIdx < 4 && accumFrame == convergeAt[convergeIdx] && mode.useBVH)
-        {
-            
-            const std::string &pngName = convergePng[convergeIdx];
-
-            if (stbi_write_png(pngName.c_str(), screenWidth, screenHeight, 4, hostPixels, screenWidth * 4))
-                printf("Saved %s\n", pngName.c_str());
-            convergeIdx++;
-        } 
+        // screenshots handled during PBO mapping when needed
 
         float totalMs = (float)((glfwGetTime() - frameStart) * 1000.0f);
         
@@ -329,32 +413,32 @@ int main()
         frameCount++;
         accumFrame++;
         statsTimer += totalMs / 1000.0f;
-        float currentFps = 1000.0f / (accumulatedTotalMs / frameCount);
 
-        if (!benchmarkFinished)
+        // reset accums before 100 warmup frames
+        if (accumFrame == 100) 
+        {
+            accumulatedGpuMs = 0.0f;
+            accumulatedTotalMs = 0.0f;
+            frameCount = 0;
+            statsTimer = 0.0f;
+        }
+
+        float currentFps = 1000.0f / totalMs;
+
+        if (!benchmarkFinished && accumFrame > 100)
         {
             benchmarkData.push_back({(int)benchmarkData.size(), currentFps, gpuMs, totalMs, settings, mode});
             if (benchmarkData.size() >= benchmarkFrameCount)
             {
                 exportToCsv(csvName, benchmarkData);
                 benchmarkFinished = true;
-
-                unsigned long long totalBounces = 0;
-                unsigned long long totalRays = 0;
-
-                getBounceStats(totalBounces, totalRays);
-
-                if (totalRays <= 0)
-                    return;
-
-                double avgBounces = (double)totalBounces / totalRays;
-
-                printf("Benchmark Finished!\n");
-                printf("Total rays: %llu\n", totalRays);
-                printf("Total bounces: %llu\n", totalBounces);
-                printf("Average bounces per ray: %.2f\n\n", avgBounces);
             }
         }
+
+        //temp auto close once benchmark done and convergence images captured
+        // bool convDone = mode.perfTest || !mode.useBVH || convergeIdx >= 4;
+        //if (benchmarkFinished && convDone)
+        //    glfwSetWindowShouldClose(win, true);
 
         if (statsTimer >= 0.5)
         {
@@ -371,13 +455,28 @@ int main()
             frameCount = 0;
             accumulatedGpuMs = 0.0f;
             accumulatedTotalMs = 0.0f;
+
         }
     }
 
     // cleanup
-    delete[] hostPixels;
+    if (cudaPbo)
+    {
+        cudaGraphicsUnregisterResource(cudaPbo);
+        cudaPbo = nullptr;
+    }
+    if (pbo)
+    {
+        glDeleteBuffers(1, &pbo);
+        pbo = 0;
+    }
+
     freeDevicePixels();
 
     glfwTerminate();
     return 0;
 }
+
+
+
+

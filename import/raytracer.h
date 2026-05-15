@@ -1,6 +1,7 @@
 #ifndef RAYTRACER_H
 #define RAYTRACER_H
 
+
 struct SceneSettings
 {
     int maxBounces;
@@ -19,6 +20,8 @@ struct CurrentMode
 };
 
 float launchRayTracer(void *hostPixels, SceneSettings settings, CurrentMode mode);
+// new launch directly into a device pointer
+float launchRayTracerToDevice(void *devicePixels, SceneSettings settings, CurrentMode mode);
 void getBounceStats(unsigned long long &totalBounces, unsigned long long &totalRays);
 
 void initDevicePixel(SceneSettings settings);
