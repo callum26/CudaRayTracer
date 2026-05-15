@@ -1243,7 +1243,9 @@ void initScene(CurrentMode mode, SceneSettings settings)
         0.55f                  // lightradiuys
     };
 
-    int MAX_OBJECTS = perfTest ? 1024 : 256;
+    int gridSize = settings.perfTestGridSize;
+    // adjustable grid for perf test 3dims so ^3 + some extra objs for the scene
+    int MAX_OBJECTS = perfTest ? (gridSize * gridSize * gridSize + 32) : 256;
 
     // heap allocations instead of stack arrays
     Object *Hobjects = new Object[MAX_OBJECTS];
@@ -1285,7 +1287,7 @@ void initScene(CurrentMode mode, SceneSettings settings)
         // old demo scene
         addSphere(Hobjects, HobjectCount, {-1.25f, -2.0f, -6.2f}, sphereDiffuse, 1.0f);
         addSphere(Hobjects, HobjectCount, {1.30f, -1.20f, -6.10f}, sphereGlass, 0.8f);
-        addSphere(Hobjects, HobjectCount, {-0.55f, -2.50f, -3.70f}, sphereAmber, 0.50f);
+        addSphere(Hobjects, HobjectCount, {-0.55f, -2.30f, -3.70f}, sphereAmber, 0.50f);
     }
 
     addQuadAsTwoTriangles(

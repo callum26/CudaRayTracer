@@ -9,6 +9,7 @@ struct SceneSettings
     int lightSamples;
     int screenWidth;
     int screenHeight;
+    int perfTestGridSize;
 };
 
 struct CurrentMode

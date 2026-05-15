@@ -5,8 +5,13 @@
 #include <cstdio>
 #include <sstream>
 #include "raytracer.h"
+#include <array>
 #include <vector>
 #include <iomanip>
+
+// for image creating 
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "glfw-3.4/deps/stb_image_write.h"
 
 const int benchmarkFrameCount = 500;
 
@@ -38,30 +43,22 @@ void exportToCsv(const std::string &name, const std::vector<FrameData> &data)
 
     SceneSettings initSettings = data[0].settings;
     CurrentMode initMode = data[0].mode;
-    file << "maxBounces,maxShadowBounces,samplesPerPixel,lightSamples,screenWidth,screenHeight,useBVH,perfTest\n";
+    file << "maxBounces,maxShadowBounces,samplesPerPixel,lightSamples,screenWidth,screenHeight,useBVH,perfTest,gridSize\n";
     file << initSettings.maxBounces << "," << initSettings.maxShadowBounces << "," << initSettings.samplesPerPixel
          << "," << initSettings.lightSamples << "," << initSettings.screenWidth << "," << initSettings.screenHeight
-         << "," << (initMode.useBVH ? 1 : 0) << "," << (initMode.perfTest ? 1 : 0) << "\n";
-
+         << "," << (initMode.useBVH ? 1 : 0) << "," << (initMode.perfTest ? 1 : 0) << "," << initSettings.perfTestGridSize << "\n";
     file << "frameIndex,fps, gpuMs,totalMs\n";
     file << std::fixed << std::setprecision(2);
 
     for (const auto &f : data)
     {
+
         file << f.index << "," << f.currentFps << "," << f.gpuMs << "," << f.totalMs << "," << "\n";
     }
 
     printf("Exported 500 frames to %s\n", name.c_str());
 }
 
-const unsigned int screenWidth = 800;
-const unsigned int screenHeight = 800;
-
-// seperated the shader read file compiling and all other host cpp code into a seprate file was causing many issues when trying to boot the ray tracer
-// seperating the code makes it much easier and probably i think more efficient as the cuda compiler was having to deal with
-// both of the logic causing slow downs
-// theses lines are only temporary was just trying to get it running
-// will change later to my code
 // shader read func from https://learnopengl.com/Getting-started/Shaders
 std::string readShader(const char *path)
 {
@@ -130,6 +127,54 @@ unsigned int createProgram(const char *vpath, const char *fpath)
 
 int main()
 {
+    // move the calculation of host pixel buffer solely with cpp
+    SceneSettings settings = {
+        15,  // maxBounces
+        8,   // maxShadowBounces
+        1,   // samplesPerPixel
+        1,   // lightSamples
+        800, // screenWidth
+        800,  // screenHeight
+        10 // grid size
+    };
+
+    CurrentMode mode = {
+        true, // useBVH
+        false // perfTest
+    };
+
+    const int screenWidth = settings.screenWidth;
+    const int screenHeight = settings.screenHeight;
+    const int convergeAt[] = {1, 64, 512, 4096};
+
+    std::string csvName = std::string("bench_")
+        + (mode.perfTest ? "perftest" : "cornell") + "_"
+        + (mode.useBVH   ? "bvh"      : "brute")
+        + "_" + std::to_string(screenWidth) + "x" + std::to_string(screenHeight)
+        + "_b"  + std::to_string(settings.maxBounces) + "_ls" + std::to_string(settings.lightSamples)
+        + "_spp" + std::to_string(settings.samplesPerPixel) + (mode.perfTest ? "_gs" + std::to_string(settings.perfTestGridSize) : "") + ".csv";
+ 
+    // change file name based on what we r doing
+    std::array<std::string, 4> convergePng;
+    for (size_t i = 0; i < convergePng.size(); ++i)
+    {
+        std::ostringstream name;
+
+        name << (mode.perfTest ? "conv_perftest" : "conv_cornell")
+             << "_b" << settings.maxBounces << "_sb" << settings.maxShadowBounces << "_spp" << settings.samplesPerPixel
+             << "_ls" << settings.lightSamples << "_" << settings.screenWidth << "x" << settings.screenHeight
+             << "_frame" << convergeAt[i] << ".png";
+
+        convergePng[i] = name.str();
+    }
+
+    bool benchmarkFinished = false;
+    int convergeIdx = 0;
+    int accumFrame = 0; // counts every rendered frame from startup
+
+    std::vector<FrameData> benchmarkData;
+    benchmarkData.reserve(benchmarkFrameCount);
+    
     if (!glfwInit())
         return -1;
 
@@ -207,26 +252,8 @@ int main()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-    // move the calculation of host pixel buffer solely with cpp
-    SceneSettings settings = {
-        15,  // maxBounces
-        8,   // maxShadowBounces
-        1,   // samplesPerPixel
-        1,   // lightSamples
-        800, // screenWidth
-        800  // screenHeight
-    };
-
-    CurrentMode mode = {
-        true, // useBVH
-        false // perfTest
-    };
-
-    const int screenWidth = settings.screenWidth;
-    const int screenHeight = settings.screenHeight;
-
     unsigned char *hostPixels = new unsigned char[screenWidth * screenHeight * 4];
-
+    stbi_flip_vertically_on_write(1);
     initDevicePixel(settings);
     initScene(mode, settings);
 
@@ -238,10 +265,7 @@ int main()
     float accumulatedTotalMs = 0.0f;
     float avgFps = 0.0f;
 
-    std::vector<FrameData> benchmarkData;
-    benchmarkData.reserve(benchmarkFrameCount);
-
-    bool benchmarkFinished = false;
+    
 
     while (!glfwWindowShouldClose(win))
     {
@@ -287,11 +311,23 @@ int main()
         glfwSwapBuffers(win);
         glfwPollEvents();
 
-        float totalMs = (float)((glfwGetTime() - frameStart) * 1000.0f);
+        // only save ss in cornell run
+        if (convergeIdx < 4 && accumFrame == convergeAt[convergeIdx] && mode.useBVH)
+        {
+            
+            const std::string &pngName = convergePng[convergeIdx];
 
+            if (stbi_write_png(pngName.c_str(), screenWidth, screenHeight, 4, hostPixels, screenWidth * 4))
+                printf("Saved %s\n", pngName.c_str());
+            convergeIdx++;
+        } 
+
+        float totalMs = (float)((glfwGetTime() - frameStart) * 1000.0f);
+        
         accumulatedGpuMs += gpuMs;
         accumulatedTotalMs += totalMs;
         frameCount++;
+        accumFrame++;
         statsTimer += totalMs / 1000.0f;
         float currentFps = 1000.0f / (accumulatedTotalMs / frameCount);
 
@@ -300,7 +336,7 @@ int main()
             benchmarkData.push_back({(int)benchmarkData.size(), currentFps, gpuMs, totalMs, settings, mode});
             if (benchmarkData.size() >= benchmarkFrameCount)
             {
-                exportToCsv("frame_metrics.csv", benchmarkData);
+                exportToCsv(csvName, benchmarkData);
                 benchmarkFinished = true;
             }
         }
