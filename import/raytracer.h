@@ -19,6 +19,7 @@ struct CurrentMode
 };
 
 float launchRayTracer(void *hostPixels, SceneSettings settings, CurrentMode mode);
+void getBounceStats(unsigned long long &totalBounces, unsigned long long &totalRays);
 
 void initDevicePixel(SceneSettings settings);
 void freeDevicePixels();
