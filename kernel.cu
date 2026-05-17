@@ -841,10 +841,8 @@ __device__ void processOpaqueRay(Ray &ray, Vec3 surfaceNormal, curandState &rng)
 }
 
 /*ADD SPECULAR LIGHT TRANSPARENT OBJ SPECULAR I THINK SURELY?*/
-__device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float objectDistance, int objectIndex, curandState *rng, Vec3 surfaceNormal, BVHNode *bvhNodes, int *bvhObjects, Object *objects, Vec3 strengthOfRay, bool useBVH, SceneSettings settings)
+__device__ Vec3 postShadingColour(const Ray &ray, const Object &object, float objectDistance, int objectIndex, curandState *rng, Vec3 surfaceNormal, BVHNode *bvhNodes, int *bvhObjects, Object *objects, Vec3 strengthOfRay, bool useBVH, const int samplesPerPixel, const int maxBounces, const int lightSamples, const int maxShadowBounces)
 {
-    const int maxShadowBounces = settings.maxShadowBounces;
-    const int lightSamples = settings.lightSamples;
 
     Ray shadeRay = ray;
     shadeRay.hitPoint = shadeRay.origin + (shadeRay.direction * objectDistance);
@@ -1013,11 +1011,15 @@ __device__ uchar4 toneMappedPixel(Vec3 *accumulation, int pixelIndex, int frameI
     return make_uchar4(finalR, finalG, finalB, 255);
 }
 
-__global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accumulation, int frameIndex, BVHNode *bvhNodes, int *bvhObjects, Object *objects, SceneSettings settings, CurrentMode mode)
+__global__ __launch_bounds__(256, 2) void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accumulation, int frameIndex, BVHNode *bvhNodes, int *bvhObjects, Object *objects, SceneSettings settings, CurrentMode mode)
 {
     const int screenWidth = settings.screenWidth;
     const int screenHeight = settings.screenHeight;
     const int samplesPerPixel = settings.samplesPerPixel;
+    const int maxBounces = settings.maxBounces;
+    const int shadowBounces = settings.maxShadowBounces;
+    const int lightSamples = settings.lightSamples;
+
     bool useBVH = mode.useBVH;
 
     int pixelX = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1037,7 +1039,7 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
 
     Vec3 postSampleColour = {0.0f, 0.0f, 0.0f};
 
-    for (int s = 0; s < settings.samplesPerPixel; s++)
+    for (int s = 0; s < samplesPerPixel; s++)
     {
         float randomJitterX = curand_uniform(&rng) - 0.5f;
         float randomJitterY = curand_uniform(&rng) - 0.5f;
@@ -1061,7 +1063,9 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
         Vec3 insideEntryPoint = {0.0f, 0.0f, 0.0f};
 
         int bounceCount = 0;
-        for (int i = 0; i < settings.maxBounces; i++)
+
+#pragma unroll 0
+        for (int i = 0; i < maxBounces; i++)
         {
             bounceCount++;
             float objectDistance = CUDART_INF;
@@ -1116,7 +1120,7 @@ __global__ void renderKernel(uchar4 *pixels, curandState *rngStates, Vec3 *accum
                 if (hitObject.material.transparency > 0.0f)
                     strengthOfRay = strengthOfRay * (1.0f / fmaxf(0.001f, 1.0f - hitObject.material.transparency));
 
-                Vec3 hitColour = postShadingColour(ray, hitObject, objectDistance, objectIndex, &rng, surfaceNormal, bvhNodes, bvhObjects, objects, strengthOfRay, useBVH, settings);
+                Vec3 hitColour = postShadingColour(ray, hitObject, objectDistance, objectIndex, &rng, surfaceNormal, bvhNodes, bvhObjects, objects, strengthOfRay, useBVH, samplesPerPixel, maxBounces, lightSamples, shadowBounces);
                 pixelColour = pixelColour + (hitColour * strengthOfRay);
 
                 // calcs via opaque ray function simples the code
@@ -1397,7 +1401,7 @@ void resetAccumulation(SceneSettings settings)
     frameIndex = 0;
 }
 
-// New API: render directly into a provided device pointer (e.g. mapped PBO)
+// new render directly into a provided device pointer
 float launchRayTracerToDevice(void *devicePixels, SceneSettings settings, CurrentMode mode)
 {
     const int screenWidth = settings.screenWidth;
