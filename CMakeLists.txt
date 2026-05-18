@@ -37,6 +37,11 @@ target_include_directories(rayTracer PRIVATE
 set_target_properties(rayTracer PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
 )
+
+target_compile_options(rayTracer PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
+)
+
 target_link_libraries(rayTracer PRIVATE
     glfw
     glad

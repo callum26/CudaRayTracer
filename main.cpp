@@ -12,7 +12,7 @@
 #include <iomanip>
 #include <future>
 
-// for image creating 
+// for image creating
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "glfw-3.4/deps/stb_image_write.h"
 
@@ -28,8 +28,8 @@ struct FrameData
     CurrentMode mode;
 };
 
-
-struct OutputNames {
+struct OutputNames
+{
     std::string csvName;
     std::array<std::string, 4> convergePng;
 };
@@ -80,7 +80,6 @@ void exportToCsv(const std::string &name, const std::vector<FrameData> &data)
 
     file << "Total Rays,Total Bounces,Average Bounces Per Ray\n";
     file << totalRays << "," << totalBounces << "," << avgBounces << "\n";
-    
 
     printf("Exported 500 frames to %s\n", name.c_str());
 }
@@ -152,7 +151,8 @@ unsigned int createProgram(const char *vpath, const char *fpath)
 }
 
 // move outside main we can use key proeprlly
-namespace fullState {
+namespace fullState
+{
     // move the calculation of host pixel buffer solely with cpp
     SceneSettings settings = {
         15,  // maxBounces
@@ -171,32 +171,33 @@ namespace fullState {
 }
 
 // move keys to an event driven input callback
-void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods){
-    if (action != GLFW_PRESS) return;
-    
-    switch(key){
-        case GLFW_KEY_ESCAPE:
-            glfwSetWindowShouldClose(window, true);
-            break;
-        case GLFW_KEY_B:
-            fullState::mode.useBVH = !fullState::mode.useBVH;
-            resetAccumulation(fullState::settings);
-            break;
-        case GLFW_KEY_T:
-            fullState::mode.perfTest = !fullState::mode.perfTest;
-            resetAccumulation(fullState::settings);
-            break;
+void keyCallback(GLFWwindow *window, int key, int scancode, int action, int mods)
+{
+    if (action != GLFW_PRESS)
+        return;
+
+    switch (key)
+    {
+    case GLFW_KEY_ESCAPE:
+        glfwSetWindowShouldClose(window, true);
+        break;
+    case GLFW_KEY_B:
+        fullState::mode.useBVH = !fullState::mode.useBVH;
+        initScene(fullState::mode, fullState::settings);
+        resetAccumulation(fullState::settings);
+        break;
+    case GLFW_KEY_T:
+        fullState::mode.perfTest = !fullState::mode.perfTest;
+        initScene(fullState::mode, fullState::settings);
+        resetAccumulation(fullState::settings);
+        break;
     }
 }
 
-OutputNames findFileNames(const SceneSettings &settings, const CurrentMode &mode, const int convergeAt[]){
+OutputNames findFileNames(const SceneSettings &settings, const CurrentMode &mode, const int convergeAt[])
+{
     OutputNames names;
-    names.csvName = std::string("bench_")
-        + (mode.perfTest ? "perftest" : "cornell") + "_"
-        + (mode.useBVH   ? "bvh"      : "brute")
-        + "_" + std::to_string(settings.screenWidth) + "x" + std::to_string(settings.screenHeight)
-        + "_b"  + std::to_string(settings.maxBounces) + "_sb" + std::to_string(settings.maxShadowBounces) +  "_ls" + std::to_string(settings.lightSamples)
-        + "_spp" + std::to_string(settings.samplesPerPixel) + (mode.perfTest ? "_gs" + std::to_string(settings.perfTestGridSize) : "") + ".csv";
+    names.csvName = std::string("bench_") + (mode.perfTest ? "perftest" : "cornell") + "_" + (mode.useBVH ? "bvh" : "brute") + "_" + std::to_string(settings.screenWidth) + "x" + std::to_string(settings.screenHeight) + "_b" + std::to_string(settings.maxBounces) + "_sb" + std::to_string(settings.maxShadowBounces) + "_ls" + std::to_string(settings.lightSamples) + "_spp" + std::to_string(settings.samplesPerPixel) + (mode.perfTest ? "_gs" + std::to_string(settings.perfTestGridSize) : "") + ".csv";
 
     // change file name based on what we r doing
     for (size_t i = 0; i < names.convergePng.size(); ++i)
@@ -213,12 +214,11 @@ OutputNames findFileNames(const SceneSettings &settings, const CurrentMode &mode
     return names;
 }
 
-
 int main()
 {
     SceneSettings settings = fullState::settings;
     CurrentMode mode = fullState::mode;
-    
+
     int accumFrame = 0; // counts every rendered frame from startup
 
     const int screenWidth = settings.screenWidth;
@@ -233,8 +233,7 @@ int main()
     OutputNames names = findFileNames(settings, mode, convergeAt);
     std::string csvName = names.csvName;
     std::array<std::string, 4> convergePng = names.convergePng;
-    
-    
+
     if (!glfwInit())
         return -1;
 
@@ -244,7 +243,6 @@ int main()
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
     GLFWwindow *win = glfwCreateWindow(screenWidth, screenHeight, "CUDA Ray Tracer", NULL, NULL);
-    
 
     if (!win)
     {
@@ -318,7 +316,7 @@ int main()
 
     // create PBO and register with CUDA
     GLuint pbo = 0;
-    cudaGraphicsResource* cudaPbo = nullptr;
+    cudaGraphicsResource *cudaPbo = nullptr;
 
     // same as before
     glGenBuffers(1, &pbo);
@@ -326,10 +324,11 @@ int main()
     glBufferData(GL_PIXEL_UNPACK_BUFFER, screenWidth * screenHeight * sizeof(uint8_t) * 4, nullptr, GL_STREAM_DRAW);
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 
-    // register PBO with CUDA 
+    // register PBO with CUDA
     cudaError_t cErr = cudaGraphicsGLRegisterBuffer(&cudaPbo, pbo, cudaGraphicsMapFlagsWriteDiscard);
-    
-    if (cErr != cudaSuccess) {
+
+    if (cErr != cudaSuccess)
+    {
         fprintf(stderr, "cudaGraphicsGLRegisterBuffer failed: %s\n", cudaGetErrorString(cErr));
         cudaPbo = nullptr;
     }
@@ -349,6 +348,10 @@ int main()
 
     while (!glfwWindowShouldClose(win))
     {
+        // update settings/mode from fullState
+        settings = fullState::settings;
+        mode = fullState::mode;
+
         float frameStart = glfwGetTime();
 
         // clear screen
@@ -369,19 +372,20 @@ int main()
         {
             // async copy frame data
             cudaMemcpy(hostPixels.data(), devPtr, screenWidth * screenHeight * 4, cudaMemcpyDeviceToHost);
-            
+
             // local copy of the buffer so the background thread owns it
-            std::vector<unsigned char> asyncPixels = hostPixels; 
+            std::vector<unsigned char> asyncPixels = hostPixels;
             // fetch png name
             std::string currentPngName = convergePng[convergeIdx];
 
             // before was casuing massive performance spikes skewing results
             // create seperate thread
-            std::thread([asyncPixels, currentPngName, screenWidth, screenHeight]() {
+            std::thread([asyncPixels, currentPngName, screenWidth, screenHeight]()
+                        {
                 if (stbi_write_png(currentPngName.c_str(), screenWidth, screenHeight, 4, asyncPixels.data(), screenWidth * 4)) {
                     printf("Saved %s\n", currentPngName.c_str());
-                }
-            }).detach();
+                } })
+                .detach();
 
             convergeIdx++;
         }
@@ -407,7 +411,7 @@ int main()
         // screenshots handled during PBO mapping when needed
 
         float totalMs = (float)((glfwGetTime() - frameStart) * 1000.0f);
-        
+
         accumulatedGpuMs += gpuMs;
         accumulatedTotalMs += totalMs;
         frameCount++;
@@ -415,7 +419,7 @@ int main()
         statsTimer += totalMs / 1000.0f;
 
         // reset accums before 100 warmup frames
-        if (accumFrame == 100) 
+        if (accumFrame == 100)
         {
             accumulatedGpuMs = 0.0f;
             accumulatedTotalMs = 0.0f;
@@ -435,10 +439,10 @@ int main()
             }
         }
 
-        //temp auto close once benchmark done and convergence images captured
-        // bool convDone = mode.perfTest || !mode.useBVH || convergeIdx >= 4;
-        //if (benchmarkFinished && convDone)
-        //    glfwSetWindowShouldClose(win, true);
+        // temp auto close once benchmark done and convergence images captured
+        //  bool convDone = mode.perfTest || !mode.useBVH || convergeIdx >= 4;
+        // if (benchmarkFinished && convDone)
+        //     glfwSetWindowShouldClose(win, true);
 
         if (statsTimer >= 0.5)
         {
@@ -455,7 +459,6 @@ int main()
             frameCount = 0;
             accumulatedGpuMs = 0.0f;
             accumulatedTotalMs = 0.0f;
-
         }
     }
 
@@ -476,7 +479,3 @@ int main()
     glfwTerminate();
     return 0;
 }
-
-
-
-

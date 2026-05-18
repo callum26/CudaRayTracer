@@ -483,7 +483,7 @@ __device__ bool rayCastShadowBVH(const Ray &ray, float &hitDistance, int &object
         }
     }
     hitDistance = closest;
-    return true;
+    return (closest < maxDist);
 }
 
 // surfaceNormal - normalised direction vector of a vector perpendicular to surface on that point
@@ -1064,7 +1064,6 @@ __global__ __launch_bounds__(256, 2) void renderKernel(uchar4 *pixels, curandSta
 
         int bounceCount = 0;
 
-#pragma unroll 0
         for (int i = 0; i < maxBounces; i++)
         {
             bounceCount++;
